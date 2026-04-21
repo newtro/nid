@@ -7,6 +7,7 @@
 pub mod context;
 pub mod compressor;
 pub mod fingerprint;
+pub mod layers;
 pub mod redact;
 pub mod session;
 

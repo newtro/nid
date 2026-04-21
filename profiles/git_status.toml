@@ -12,7 +12,7 @@ kind = "strip_ansi"
 # Keep header lines, section headings, and file-change entries.
 [[rules]]
 kind = "keep_lines"
-match = '^(On branch |Your branch|HEAD detached|Changes |Untracked |nothing to |\s+(new file|modified|deleted|renamed|typechange):|\s+[A-Za-z0-9_.-]+\s*$)'
+match = '^(On branch |Your branch|HEAD detached|Changes |Untracked |nothing to |no changes |\s+(new file|modified|deleted|renamed|typechange):|\s+[A-Za-z0-9_.-]+\s*$)'
 
 # Drop verbose hint lines like "(use 'git add <file>' to update...)".
 [[rules]]

@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use clap::Args;
-use nid_hooks::{detect::detect_agents, onboard};
+use nid_hooks::{detect::detect_agents, installer, onboard};
 
 #[derive(Debug, Args)]
 pub struct OnboardArgs {
@@ -61,13 +61,43 @@ pub async fn run(args: OnboardArgs) -> Result<()> {
         preserve_raw: None,
     };
 
+    if args.uninstall {
+        if paths.onboard_backup.exists() {
+            installer::uninstall(&paths.onboard_backup)?;
+            if args.purge {
+                if paths.data_dir.exists() {
+                    std::fs::remove_dir_all(&paths.data_dir)?;
+                }
+                if paths.config_dir.exists() {
+                    std::fs::remove_dir_all(&paths.config_dir)?;
+                }
+                println!("uninstalled + purged");
+            } else {
+                println!("uninstalled (data preserved in {})", paths.data_dir.display());
+            }
+        } else {
+            println!("no onboard backup found at {}", paths.onboard_backup.display());
+        }
+        return Ok(());
+    }
+
     let plan = onboard::plan(&detected, &opts, paths.onboard_backup.clone());
     println!("Planned changes:");
     for c in &plan.changes {
         println!("  {:?} -> {}", c.agent, c.config_path.display());
     }
-    println!("(apply/uninstall not yet wired in Phase 1 — see Phase 2)");
 
+    if !args.non_interactive && !args.reconfigure {
+        println!("(pass --non-interactive to apply)");
+        return Ok(());
+    }
+
+    let binary = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string))
+        .unwrap_or_else(|| "nid".into());
+    let _ = installer::apply(&plan, &binary)?;
+    println!("applied. backup at {}", paths.onboard_backup.display());
     Ok(())
 }
 

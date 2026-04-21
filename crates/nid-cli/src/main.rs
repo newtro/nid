@@ -52,6 +52,12 @@ enum Command {
     Gc,
     /// Update to a new nid release.
     Update(cmd::update::UpdateArgs),
+    /// Internal: per-agent hook handler. Reads PreTool JSON from stdin and
+    /// emits a rewrite response on stdout.
+    #[command(hide = true, name = "__hook")]
+    Hook {
+        agent: String,
+    },
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -73,6 +79,7 @@ async fn main() -> Result<()> {
         Some(Command::Trust(sub)) => cmd::trust::run(sub).await,
         Some(Command::Gc) => cmd::gc::run().await,
         Some(Command::Update(args)) => cmd::update::run(args).await,
+        Some(Command::Hook { agent }) => cmd::hook::run(agent).await,
         None => {
             if cli.passthrough.is_empty() {
                 print_help();

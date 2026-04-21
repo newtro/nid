@@ -11,10 +11,12 @@
 
 pub mod agents;
 pub mod detect;
+pub mod installer;
 pub mod onboard;
 pub mod rewrite;
 
-pub use agents::{Agent, AgentKind, AgentRegistry};
+pub use agents::{Agent, AgentKind, AgentRegistry, HookResponse, PreToolPayload};
 pub use detect::{detect_agents, DetectionResult};
+pub use installer::{apply, uninstall};
 pub use onboard::{OnboardBackup, OnboardOptions, OnboardPlan};
-pub use rewrite::{rewrite_command, RewriteDecision};
+pub use rewrite::{rewrite_command, RewriteDecision, RewriteOptions};

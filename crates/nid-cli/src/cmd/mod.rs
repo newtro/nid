@@ -3,6 +3,7 @@
 pub mod doctor;
 pub mod gain;
 pub mod gc;
+pub mod hook;
 pub mod onboard;
 pub mod paths;
 pub mod profiles;

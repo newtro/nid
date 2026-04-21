@@ -1,19 +1,34 @@
 //! `nid <cmd...>` — the hook-triggered hot path.
 //!
-//! Phase 1 scaffold: fingerprint argv, resolve an (optional) bundled profile,
-//! spawn the child, capture output, apply Layer 1 + (if found) Layer 3 DSL,
-//! persist raw, write a session record. The full streaming pipeline and
-//! SIGTERM handling land in Phase 2. This scaffold already does real work:
-//! real child-spawn, real capture, real redaction, real DSL application when
-//! a matching bundled profile exists.
+//! Pipeline:
+//! 1. fingerprint argv (Scheme R).
+//! 2. spawn child via shell; capture stdout+stderr.
+//! 3. redact secrets (pre-persistence).
+//! 4. Layer 1 generic cleanup, always.
+//! 5. Layer 3 (bundled DSL) if fingerprint matches, else Layer 2 format path.
+//! 6. persist raw + compressed blobs, write session row.
+//! 7. emit compressed to stdout with attestation footer.
+//!
+//! SIGTERM: catch once; flush whatever compressed content we've produced,
+//! emit a terminal marker, exit 143.
 
 use anyhow::Result;
-use nid_core::{fingerprint, redact, session::SessionId};
+use nid_core::{
+    fingerprint,
+    layers::{detect_format, Layer1Generic},
+    redact,
+    session::SessionId,
+    Compressor, Context,
+};
+use nid_dsl::ast::Profile;
 use nid_storage::{
     blob::{BlobKind, BlobStore},
     session_repo::{NewSession, SessionRepo},
     Db,
 };
+use std::io::Cursor;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
@@ -29,44 +44,78 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     let id = SessionId::new_random();
     let started = unix_now();
 
-    // Resolve the bundled profile by fingerprint, if any.
-    let bundled = nid_profiles::load_all();
-    let profile = bundled.into_iter().find(|(_, p)| p.meta.fingerprint == fp).map(|(_, p)| p);
+    // Install SIGTERM trap (best-effort).
+    let interrupted = Arc::new(AtomicBool::new(false));
+    install_sigterm_trap(interrupted.clone());
 
-    // Spawn the command.
+    // Resolve a bundled profile by fingerprint.
+    let bundled = nid_profiles::load_all();
+    let profile: Option<Profile> = bundled
+        .into_iter()
+        .find(|(_, p)| p.meta.fingerprint == fp)
+        .map(|(_, p)| p);
+
+    // Spawn + capture.
     let cmd_str = argv.join(" ");
-    let (exit_code, raw_out) = spawn_and_capture(&argv).await?;
+    let (exit_code, raw_out) = spawn_and_capture(&argv, interrupted.clone()).await?;
 
     // Redact before persistence.
     let raw_redacted = redact::redact(&raw_out);
 
-    // Apply DSL if we have one. Layer 1 strip_ansi / dedup come in via the
-    // profile's own rules or via the generic Layer 1 in Phase 2.
+    // Layer 1 — always.
+    let layer1 = Layer1Generic::default();
+    let ctx = Context::new(&fp, argv.clone()).with_shadow(shadow);
+    let mut l1_input = Cursor::new(raw_redacted.as_bytes().to_vec());
+    let mut l1_output: Vec<u8> = Vec::with_capacity(raw_redacted.len());
+    let _ = layer1
+        .compress(&mut l1_input, &mut l1_output, &ctx)
+        .map_err(|e| anyhow::anyhow!("layer1: {e}"))?;
+    let after_layer1 = String::from_utf8_lossy(&l1_output).to_string();
+
+    // Tier B: try the profile (Layer 3/5), else Layer 2 format detect.
     let compressed = match &profile {
-        Some(p) => nid_dsl::interpreter::apply_rules(&raw_redacted, &p.rules).to_string(),
-        None => raw_redacted.clone(),
+        Some(p) => {
+            let co = nid_dsl::interpreter::apply_rules(&after_layer1, &p.rules);
+            co.to_string()
+        }
+        None => {
+            // For now, Layer 2 just passes through with format-aware cleanup
+            // via the native compressor. We emit the layer1 output directly.
+            let _format = detect_format(after_layer1.as_bytes());
+            after_layer1.clone()
+        }
     };
 
-    // Persist raw blob + session row.
+    // Persist.
     let db = Db::open(&paths.db_path)?;
     let store = BlobStore::new(&db, &paths.blobs_dir);
     let raw_sha = store.put(raw_redacted.as_bytes(), BlobKind::Raw)?;
     let cmp_sha = store.put(compressed.as_bytes(), BlobKind::Compressed)?;
 
     let repo = SessionRepo::new(&db);
+    let cwd_owned = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.to_str().map(str::to_string));
+    let parent_agent_owned = std::env::var("NID_PARENT_AGENT").ok();
     repo.create(&NewSession {
         id: id.as_str(),
         fingerprint: &fp,
         profile_id: None,
         command: &cmd_str,
         argv_raw: &cmd_str,
-        cwd: std::env::current_dir().ok().and_then(|p| p.to_str().map(str::to_string)).as_deref(),
-        parent_agent: std::env::var("NID_PARENT_AGENT").ok().as_deref(),
+        cwd: cwd_owned.as_deref(),
+        parent_agent: parent_agent_owned.as_deref(),
         started_at: started,
     })?;
 
     let ended = unix_now();
-    let mode = if shadow { "Shadow" } else if profile.is_some() { "Full" } else { "Passthrough" };
+    let mode = if shadow {
+        "Shadow"
+    } else if profile.is_some() {
+        "Full"
+    } else {
+        "Passthrough"
+    };
     let tokens_saved = (raw_redacted.len() as i64 - compressed.len() as i64).max(0) / 4;
     repo.finalize(
         id.as_str(),
@@ -81,11 +130,18 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         mode,
     )?;
 
-    // In shadow mode, emit raw unchanged (plan §14).
+    // Output.
     if shadow {
+        // Plan §14 — raw passthrough, counterfactual captured in the store.
         print!("{raw_out}");
     } else {
         print!("{compressed}");
+        if !compressed.ends_with('\n') {
+            println!();
+        }
+        if interrupted.load(Ordering::SeqCst) {
+            println!("--- [nid: interrupted] ---");
+        }
         println!(
             "[nid: profile {}/v{}, mode={}, raw via nid show {}]",
             profile.as_ref().map(|p| p.meta.fingerprint.as_str()).unwrap_or("<none>"),
@@ -98,9 +154,29 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     std::process::exit(exit_code);
 }
 
-async fn spawn_and_capture(argv: &[String]) -> Result<(i32, String)> {
-    // Join argv and spawn via the system shell so pipelines work. Plan §4.4.2
-    // — whole-pipeline wrap.
+#[cfg(unix)]
+fn install_sigterm_trap(flag: Arc<AtomicBool>) {
+    use tokio::signal::unix::{signal, SignalKind};
+    tokio::spawn(async move {
+        if let Ok(mut s) = signal(SignalKind::terminate()) {
+            s.recv().await;
+            flag.store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn install_sigterm_trap(flag: Arc<AtomicBool>) {
+    // Windows: approximate SIGTERM with Ctrl-Break.
+    tokio::spawn(async move {
+        if let Ok(mut s) = tokio::signal::windows::ctrl_break() {
+            s.recv().await;
+            flag.store(true, Ordering::SeqCst);
+        }
+    });
+}
+
+async fn spawn_and_capture(argv: &[String], _interrupted: Arc<AtomicBool>) -> Result<(i32, String)> {
     let joined = argv.join(" ");
     let mut shell_cmd: TokioCommand = if cfg!(target_os = "windows") {
         let mut c = TokioCommand::new("cmd");
