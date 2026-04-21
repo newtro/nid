@@ -1,3 +1,7 @@
+echo "Starting build"
+Starting build
+echo "Compiling foo.c"
+Compiling foo.c
 make[1]: Entering directory '/home/alice/proj'
 gcc -c -o foo.o foo.c
 foo.c:12:5: error: 'undefined_symbol' undeclared (first use in this function)

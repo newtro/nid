@@ -1,13 +1,21 @@
-# gh pr list — tabular PR listing; strip ANSI + dedup.
+# gh pr list — strip auth prompts + blank lines; dedup PR rows.
 [meta]
 fingerprint = "gh pr list"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "tabular"
-description = "gh CLI PR listing — preserve as-is."
+description = "Drop gh CLI auth/tip banners; keep PR listing."
 
 [[rules]]
 kind = "strip_ansi"
+
+[[rules]]
+kind = "drop_lines"
+match = '^(gh auth|Hint: |Tip: |\! )'
+
+[[rules]]
+kind = "drop_lines"
+match = '^\s*$'
 
 [[rules]]
 kind = "dedup"

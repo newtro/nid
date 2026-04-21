@@ -1,13 +1,24 @@
-# psql (table-format output) — tabular, preserve as-is.
+# psql (table-format) — drop metadata banners ("Time:", "Timing is on",
+# psql startup chatter), preserve the table + row count.
 [meta]
 fingerprint = "psql"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "tabular"
-description = "psql default table output — compact already."
+description = "Strip psql banners; keep table and row count."
 
 [[rules]]
 kind = "strip_ansi"
 
+# Drop banner lines psql prints when \timing or interactive mode is on.
+[[rules]]
+kind = "drop_lines"
+match = '^(Time: [0-9.]+ ms|Timing is on|You are connected|psql \(|Type "help"|SET$|BEGIN$|COMMIT$|\s*$)'
+
 [[rules]]
 kind = "dedup"
+
+[[invariants]]
+name = "RowCountPreserved"
+check = "all_matching_preserved"
+pattern = "^\\([0-9]+ rows?\\)"

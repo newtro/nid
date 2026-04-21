@@ -1,4 +1,9 @@
 2026-04-21T10:00:00Z INFO  Starting host
+2026-04-21T10:00:01Z DEBUG Initializing worker pool
+2026-04-21T10:00:01Z TRACE State=starting
+2026-04-21T10:00:01Z DEBUG Pool ready: 8 workers
 2026-04-21T10:00:01Z INFO  Connection opened
+2026-04-21T10:00:02Z DEBUG Query parsed in 0.1ms
 2026-04-21T10:00:02Z WARN  Slow query: 412ms
+2026-04-21T10:00:03Z TRACE Worker 4 dispatched
 2026-04-21T10:00:03Z ERROR 500 returned from /api/v1/ingest

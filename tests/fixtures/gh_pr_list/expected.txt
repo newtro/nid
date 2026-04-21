@@ -1,5 +1,4 @@
 Showing 3 of 3 open pull requests in acme/widget
-
 #42  Fix deploy pipeline on rotation   alice:fix/deploy    about 2 hours ago
 #41  Add rate-limiter to /v1/ingest    bob:feat/ratelimit  about 1 day ago
 #37  Bump tokio to 1.35                carol:chore/bump    about 3 days ago

@@ -1,18 +1,31 @@
-# docker ps — keep the header row and container rows; drop nothing (tabular).
+# docker ps — keep header + container rows; drop WARN/deprecation chatter
+# that the docker CLI sometimes injects.
 [meta]
 fingerprint = "docker ps"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "tabular"
-description = "docker ps output is already compact; just strip ANSI and dedup."
+description = "Keep the table. Drop deprecation warnings and blank lines."
 
 [[rules]]
 kind = "strip_ansi"
+
+# Drop docker/compose deprecation + API version warnings that appear above
+# the table on some versions.
+[[rules]]
+kind = "drop_lines"
+match = '^(WARNING: |WARN\[|DEPRECATED: |time=".*" level=(warning|info))'
+
+# Drop blank lines between output blocks.
+[[rules]]
+kind = "drop_lines"
+match = '^\s*$'
 
 [[rules]]
 kind = "dedup"
 
 [[invariants]]
 name = "HeaderPreserved"
-check = "first_line_matches"
+check = "count_matches_at_least"
 pattern = "^CONTAINER ID"
+count = 1

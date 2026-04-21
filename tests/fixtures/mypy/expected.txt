@@ -1,4 +1,5 @@
 src/foo.py:10: error: Incompatible return value type (got "str", expected "int")  [return-value]
 src/foo.py:10: note:   def __str__(self) -> str: ...
+src/foo.py:10: note: If you believe this is a bug, please report it.
 src/bar.py:42: error: Missing type annotation  [no-untyped-def]
 Found 2 errors in 2 files (checked 12 source files)

@@ -1,13 +1,20 @@
-# git branch -a — keep branch lines, strip ANSI/dedup.
+# git branch -a — keep branch lines; drop HEAD-arrow metadata
+# (redundant with origin/<default>); strip ANSI + dedup.
 [meta]
 fingerprint = "git branch -a"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "plain"
-description = "git branch list — preserve branch names; strip noise."
+description = "Keep branch names; drop redundant HEAD pointer."
 
 [[rules]]
 kind = "strip_ansi"
+
+# Drop the `remotes/origin/HEAD -> origin/<default>` line. The default branch
+# is usually listed separately on the next line, so this is redundant.
+[[rules]]
+kind = "drop_lines"
+match = '^\s+remotes/\S+/HEAD\s+->\s'
 
 [[rules]]
 kind = "keep_lines"

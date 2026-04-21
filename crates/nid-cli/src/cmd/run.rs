@@ -46,6 +46,8 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     // Honour the shadow state file: `nid shadow enable` persists intent across
     // invocations independent of the --shadow flag.
     let shadow = shadow || crate::cmd::shadow::is_shadow_enabled(&paths.config_dir);
+    // Opportunistic blob-orphan sweep (bounded; once per calendar day).
+    let _ = crate::cmd::gc::opportunistic(&paths);
 
     let fp = fingerprint(&argv);
     let id = SessionId::new_random();
@@ -92,17 +94,24 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("layer1: {e}"))?;
     let after_layer1 = String::from_utf8_lossy(&l1_output).to_string();
 
-    // Tier B: try the profile (Layer 3/5), else Layer 2 format detect.
+    // Tier B: try the profile (Layer 3/5), else run Layer 2 format-aware
+    // cleanup over the Layer-1 output.
     let compressed = match &profile {
         Some(p) => {
             let co = nid_dsl::interpreter::apply_rules(&after_layer1, &p.rules);
             co.to_string()
         }
         None => {
-            // For now, Layer 2 just passes through with format-aware cleanup
-            // via the native compressor. We emit the layer1 output directly.
-            let _format = detect_format(after_layer1.as_bytes());
-            after_layer1.clone()
+            let format = detect_format(after_layer1.as_bytes());
+            let l2 = nid_core::layers::Layer2Format { format };
+            let mut l2_input = Cursor::new(after_layer1.as_bytes().to_vec());
+            let mut l2_output: Vec<u8> = Vec::with_capacity(after_layer1.len());
+            match l2.compress(&mut l2_input, &mut l2_output, &ctx) {
+                Ok(_) => String::from_utf8_lossy(&l2_output).to_string(),
+                // If Layer 2 fails for any reason, degrade to Layer-1 output —
+                // we never want to fail a wrapped command because of nid.
+                Err(_) => after_layer1.clone(),
+            }
         }
     };
 
@@ -112,12 +121,24 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
 
     // Phase 4: sample capture for unknown fingerprints. Cap at 64 samples per
     // fingerprint to avoid runaway growth; lock-in decides when to synthesize.
+    let mut just_captured = false;
     if profile.is_none() {
         let count = sample_repo.count_for(&fp).unwrap_or(0);
         if count < 64 {
             let sample_sha = store.put(raw_redacted.as_bytes(), BlobKind::Sample)?;
             let _ = sample_repo.insert(&fp, &sample_sha, exit_code, None);
+            just_captured = true;
         }
+    }
+
+    // C2 fix: auto-synthesis. If we just captured a sample for an unknown
+    // fingerprint, check whether the lock-in threshold is now met. If it is,
+    // kick off synthesis synchronously — it's cheap (structural-diff floor is
+    // fast; LLM refinement only fires if a backend is configured), and
+    // inlining here means the next invocation of the same command gets a
+    // real Layer 5 profile immediately.
+    if just_captured && profile.is_none() {
+        let _ = try_auto_synthesize(&fp, &sample_repo, &store, &profile_repo).await;
     }
 
     // Phase 5 — Tier 1 invariants + Tier 2 structural subset.
@@ -181,7 +202,7 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     repo.create(&NewSession {
         id: id.as_str(),
         fingerprint: &fp,
-        profile_id: None,
+        profile_id,
         command: &cmd_str,
         argv_raw: &cmd_str,
         cwd: cwd_owned.as_deref(),
@@ -214,7 +235,10 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     // Output.
     if shadow {
         // Plan §14 — raw passthrough, counterfactual captured in the store.
-        print!("{raw_out}");
+        // Emit the REDACTED raw (not the pre-redaction `raw_out`) so shadow
+        // mode doesn't leak secrets to the agent's context window.
+        // (Fixes H2 from the adversarial review.)
+        print!("{raw_redacted}");
     } else {
         print!("{compressed}");
         if !compressed.ends_with('\n') {
@@ -311,6 +335,79 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Auto-synthesis (plan §7.3): when a new sample puts the fingerprint at
+/// the lock-in threshold (N=5, or N=3 if samples are byte-identical), run
+/// the synthesis orchestrator, validate, self-test, and promote.
+///
+/// Inlined on the hot path. Kept best-effort: any error short-circuits to
+/// Ok(()) so a failed synth never breaks the wrapped command.
+async fn try_auto_synthesize(
+    fp: &str,
+    samples_repo: &nid_storage::sample_repo::SampleRepo<'_>,
+    store: &BlobStore<'_>,
+    profile_repo: &ProfileRepo<'_>,
+) -> anyhow::Result<()> {
+    let rows = samples_repo.for_fingerprint(fp)?;
+    let mut samples: Vec<String> = Vec::with_capacity(rows.len());
+    for r in &rows {
+        if let Ok(b) = store.get(&r.sample_blob_sha256) {
+            samples.push(String::from_utf8_lossy(&b).into_owned());
+        }
+    }
+
+    let verdict = nid_synthesis::lockin::should_lock_in(&samples, 5, true);
+    if !verdict.should_lock {
+        return Ok(());
+    }
+
+    // Re-check we didn't lose a race to the `nid synthesize` CLI path.
+    if profile_repo.active_for(fp)?.is_some() {
+        return Ok(());
+    }
+
+    let backend = nid_synthesis::autodetect();
+    let out =
+        nid_synthesis::orchestrator::synthesize_from_samples(fp, &samples, |prompt| async move {
+            backend.refine(&prompt).await
+        })
+        .await?;
+
+    nid_dsl::validator::validate_profile(&out.profile)?;
+
+    // Self-test against every captured sample.
+    for s in &samples {
+        let compressed = nid_dsl::interpreter::apply_rules(s, &out.profile.rules).to_string();
+        let results =
+            nid_dsl::invariants::check_invariants(&out.profile.invariants, s, &compressed)?;
+        for r in &results {
+            if !r.passed {
+                tracing::warn!(
+                    fp = fp,
+                    invariant = r.name,
+                    "auto-synthesis invariant failed on sample; keeping fingerprint unlearned"
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    let toml_bytes = out.profile.to_toml()?.into_bytes();
+    let dsl_sha = store.put(&toml_bytes, BlobKind::Dsl)?;
+    let id = profile_repo.insert_pending(&nid_storage::profile_repo::NewProfile {
+        fingerprint: fp.to_string(),
+        version: out.profile.meta.version.clone(),
+        provenance: nid_storage::profile_repo::PROV_SYNTHESIZED.into(),
+        synthesis_source: Some("structural_diff".into()),
+        dsl_blob_sha256: dsl_sha,
+        parent_fp: None,
+        split_on_flag: None,
+        signer_key_id: None,
+    })?;
+    profile_repo.promote(id)?;
+    tracing::info!(fp = fp, id = id, "auto-synthesized profile locked in");
+    Ok(())
 }
 
 /// Layer 5 lookup: if a persisted `active` profile exists for this

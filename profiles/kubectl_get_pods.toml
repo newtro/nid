@@ -1,18 +1,34 @@
-# kubectl get pods — tabular, small. Strip ANSI and dedup.
+# kubectl get pods — collapse long runs of healthy Running pods into a
+# single placeholder; keep header + any pod whose status isn't Running.
 [meta]
 fingerprint = "kubectl get pods"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "tabular"
-description = "kubectl get pods is already compact; just sanitize."
+description = "Collapse Running pod runs to reduce tokens on large clusters."
 
 [[rules]]
 kind = "strip_ansi"
+
+# Drop deprecation/context warnings kubectl sometimes prints above the table.
+[[rules]]
+kind = "drop_lines"
+match = '^(W[0-9]+|Error from server|\[.*deprecated)'
+
+# Collapse runs of 3+ consecutive Running (1/1) pods into a placeholder.
+# We keep non-Running pods (CrashLoopBackOff, Pending, Error, Completed)
+# verbatim because those are the interesting ones.
+[[rules]]
+kind = "collapse_repeated"
+pattern = '^\S+\s+1/1\s+Running\s+[0-9]+\s+\S+$'
+placeholder = "[... {count} healthy Running pods elided ...]"
+min = 3
 
 [[rules]]
 kind = "dedup"
 
 [[invariants]]
 name = "HeaderPreserved"
-check = "first_line_matches"
+check = "count_matches_at_least"
 pattern = "^NAME"
+count = 1

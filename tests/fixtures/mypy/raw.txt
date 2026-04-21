@@ -1,4 +1,13 @@
 src/foo.py:10: error: Incompatible return value type (got "str", expected "int")  [return-value]
 src/foo.py:10: note:   def __str__(self) -> str: ...
+src/foo.py:10: note: If you believe this is a bug, please report it.
 src/bar.py:42: error: Missing type annotation  [no-untyped-def]
+(checking 12 source files)
+LOG:  Mypy Version:              1.11.2
+LOG:  Config File:               mypy.ini
+LOG:  Configured Executable:     /usr/bin/python3
+LOG:  Current Executable:        /usr/bin/python3
+LOG:  Cache Dir:                 .mypy_cache
+LOG:  Compiled:                  True
+LOG:  Exclude:                   []
 Found 2 errors in 2 files (checked 12 source files)

@@ -1,13 +1,17 @@
-# az webapp log tail — streaming log lines; strip ANSI + dedup.
+# az webapp log tail — drop DEBUG/TRACE log lines; preserve INFO/WARN/ERROR.
 [meta]
 fingerprint = "az webapp log tail"
-version = "1.0.0"
+version = "1.1.0"
 schema = "1.0"
 format_claim = "log"
-description = "Azure webapp tail — keep tagged log lines verbatim."
+description = "Azure webapp streaming log — keep signal levels, drop DEBUG."
 
 [[rules]]
 kind = "strip_ansi"
+
+[[rules]]
+kind = "drop_lines"
+match = '\s(DEBUG|TRACE|VERBOSE)\s'
 
 [[rules]]
 kind = "dedup"

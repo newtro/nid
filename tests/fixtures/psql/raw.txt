@@ -1,6 +1,13 @@
+psql (16.2 (Debian 16.2-1.pgdg110+2))
+Type "help" for help.
+
+Timing is on.
+You are connected to database "mydb" as user "alice".
  id |  name   |   created
 ----+---------+-------------
   1 | alice   | 2024-01-05
   2 | bob     | 2024-02-18
   3 | carol   | 2024-03-22
 (3 rows)
+
+Time: 4.123 ms

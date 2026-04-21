@@ -1,3 +1,8 @@
+A newer version of the AWS CLI is available. Run 'aws --version' to check.
+
 2024-01-15 09:23:41 my-bucket-logs
 2024-02-01 14:10:05 prod-backups
 2024-03-22 08:41:17 user-uploads
+2024-03-22 08:41:17 user-uploads
+
+Upgrade to v2.17.0 for the latest features.

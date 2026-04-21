@@ -1,5 +1,4 @@
-NAME                          READY   STATUS    RESTARTS   AGE
-api-deployment-abc-0          1/1     Running   0          2d
-api-deployment-abc-1          1/1     Running   0          2d
-worker-xyz-123                1/1     Running   2          12h
-scheduler-77d8b6cb98-2x7nq    0/1     Pending   0          5m
+NAME                          READY   STATUS             RESTARTS   AGE
+[... 9 healthy Running pods elided ...]
+worker-xyz-999                0/1     CrashLoopBackOff   42         12h
+scheduler-77d8b6cb98-2x7nq    0/1     Pending            0          5m

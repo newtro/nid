@@ -1,4 +1,7 @@
+warning: The top-level linter settings are deprecated in favour of their counterparts in the `lint` section. Please update the following options in `ruff.toml`:
+  - 'ignore' -> 'lint.ignore'
 src/foo.py:10:5: F401 'os' imported but unused
 src/foo.py:25:1: E501 Line too long (130 > 120 characters)
 src/bar.py:7:10: F821 Undefined name 'undefined_var'
 Found 3 errors.
+[*] 2 potentially fixable with the --fix option.

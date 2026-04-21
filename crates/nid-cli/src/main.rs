@@ -49,7 +49,7 @@ enum Command {
     #[command(subcommand)]
     Trust(cmd::trust::TrustCmd),
     /// Garbage-collect blobs + purge old sessions.
-    Gc,
+    Gc(cmd::gc::GcArgs),
     /// Update to a new nid release.
     Update(cmd::update::UpdateArgs),
     /// Internal: per-agent hook handler. Reads PreTool JSON from stdin and
@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         Some(Command::Shadow(sub)) => cmd::shadow::run(sub).await,
         Some(Command::Synthesize(args)) => cmd::synthesize::run(args).await,
         Some(Command::Trust(sub)) => cmd::trust::run(sub).await,
-        Some(Command::Gc) => cmd::gc::run().await,
+        Some(Command::Gc(args)) => cmd::gc::run(args).await,
         Some(Command::Update(args)) => cmd::update::run(args).await,
         Some(Command::Hook { agent }) => cmd::hook::run(agent).await,
         None => {
