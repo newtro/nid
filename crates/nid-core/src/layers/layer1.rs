@@ -6,9 +6,7 @@
 //! - strip carriage returns
 //! - optional head/tail truncation envelope
 
-use crate::compressor::{
-    Applicability, Compressor, CompressionResult, CompressorMode, FormatKind,
-};
+use crate::compressor::{Applicability, CompressionResult, Compressor, CompressorMode, FormatKind};
 use crate::context::Context;
 use crate::session::SessionRef;
 use regex::Regex;
@@ -45,8 +43,10 @@ impl Layer1Generic {
     pub fn new(opts: Layer1Options) -> Self {
         Self { opts }
     }
+}
 
-    pub fn default() -> Self {
+impl Default for Layer1Generic {
+    fn default() -> Self {
         Self::new(Layer1Options::default())
     }
 }
@@ -118,7 +118,12 @@ impl Compressor for Layer1Generic {
         // Flush tail buffer.
         if !tail_buf.is_empty() {
             if self.opts.head > 0 {
-                writeln!(output, "--- [nid: middle elided, showing first {} and last {} lines] ---", self.opts.head, tail_buf.len())?;
+                writeln!(
+                    output,
+                    "--- [nid: middle elided, showing first {} and last {} lines] ---",
+                    self.opts.head,
+                    tail_buf.len()
+                )?;
             }
             for l in tail_buf {
                 writeln!(output, "{l}")?;

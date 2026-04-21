@@ -1,0 +1,17 @@
+# git branch -a — keep branch lines, strip ANSI/dedup.
+[meta]
+fingerprint = "git branch -a"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "git branch list — preserve branch names; strip noise."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(\*?\s+\S|\s+remotes/)'
+
+[[rules]]
+kind = "dedup"

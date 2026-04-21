@@ -1,0 +1,20 @@
+# tsc (TypeScript compiler) — keep error/warning lines + final summary.
+[meta]
+fingerprint = "tsc"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve TS error lines and final summary."
+
+[[rules]]
+kind = "strip_ansi"
+
+# TSC error format: "path(line,col): error TS1234: message"
+[[rules]]
+kind = "keep_lines"
+match = '^(\S+\([0-9]+,[0-9]+\): (error|warning) TS[0-9]+|Found [0-9]+ error|error TS[0-9]+)'
+
+[[invariants]]
+name = "ErrorsPreserved"
+check = "all_matching_preserved"
+pattern = "error TS[0-9]+"

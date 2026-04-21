@@ -56,7 +56,12 @@ impl NidPaths {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            for p in [&self.config_dir, &self.data_dir, &self.blobs_dir, &self.sessions_dir] {
+            for p in [
+                &self.config_dir,
+                &self.data_dir,
+                &self.blobs_dir,
+                &self.sessions_dir,
+            ] {
                 let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700));
             }
         }

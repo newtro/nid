@@ -59,7 +59,11 @@ pub struct OnboardBackup {
 }
 
 /// Build a plan from a detection result + options.
-pub fn plan(detected: &DetectionResult, opts: &OnboardOptions, backup_path: PathBuf) -> OnboardPlan {
+pub fn plan(
+    detected: &DetectionResult,
+    opts: &OnboardOptions,
+    backup_path: PathBuf,
+) -> OnboardPlan {
     let mut out = Vec::new();
     let filter = opts.agents.as_ref();
     for a in &detected.agents {
@@ -117,6 +121,13 @@ fn default_snippet_for(_k: AgentKind) -> String {
     .to_string()
 }
 
+/// Keep `Agent` re-exported so downstream has a symmetric API. Placing this
+/// here keeps the no-op re-export from leaking into `lib.rs`.
+#[allow(dead_code)]
+fn _re_export_agent(a: &Agent) -> AgentKind {
+    a.kind
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +139,8 @@ mod tests {
                 .iter()
                 .map(|k| DetectedAgent {
                     kind: *k,
-                    config_path: std::path::PathBuf::from("/tmp").join(format!("{}.json", k.as_str())),
+                    config_path: std::path::PathBuf::from("/tmp")
+                        .join(format!("{}.json", k.as_str())),
                     config_exists: false,
                 })
                 .collect(),
@@ -147,8 +159,10 @@ mod tests {
     #[test]
     fn plan_respects_agent_filter() {
         let det = stub_detection();
-        let mut opts = OnboardOptions::default();
-        opts.agents = Some(vec![AgentKind::ClaudeCode]);
+        let opts = OnboardOptions {
+            agents: Some(vec![AgentKind::ClaudeCode]),
+            ..Default::default()
+        };
         let p = plan(&det, &opts, std::path::PathBuf::from("/tmp/b.json"));
         assert_eq!(p.changes.len(), 1);
         assert_eq!(p.changes[0].agent, AgentKind::ClaudeCode);
@@ -157,19 +171,14 @@ mod tests {
     #[test]
     fn aider_plan_wraps_conf() {
         let det = stub_detection();
-        let mut opts = OnboardOptions::default();
-        opts.agents = Some(vec![AgentKind::Aider]);
+        let opts = OnboardOptions {
+            agents: Some(vec![AgentKind::Aider]),
+            ..Default::default()
+        };
         let p = plan(&det, &opts, std::path::PathBuf::from("/tmp/b.json"));
         assert!(matches!(
             p.changes[0].action,
             PlannedAction::WrapAiderConf { .. }
         ));
     }
-}
-
-/// Keep `Agent` re-exported so downstream has a symmetric API. Placing this
-/// here keeps the no-op re-export from leaking into `lib.rs`.
-#[allow(dead_code)]
-fn _re_export_agent(a: &Agent) -> AgentKind {
-    a.kind
 }

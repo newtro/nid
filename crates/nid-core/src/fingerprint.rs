@@ -57,11 +57,7 @@ fn split_flag(tok: &str) -> (&str, Option<&str>) {
             return (&tok[..eq], Some(&tok[eq + 1..]));
         }
     }
-    if tok.starts_with('-') {
-        (tok, None)
-    } else {
-        (tok, None)
-    }
+    (tok, None)
 }
 
 /// Canonicalize a single token according to Scheme R.
@@ -102,7 +98,7 @@ pub fn canonicalize_argv(argv_tail: &[String]) -> Vec<String> {
         // `--flag=value`
         let (key, inline_val) = split_flag(tok);
         if tok.starts_with('-') {
-            let is_shape = SHAPE_DEFINING_FLAGS.iter().any(|f| *f == key);
+            let is_shape = SHAPE_DEFINING_FLAGS.contains(&key);
             match inline_val {
                 Some(v) => {
                     out.push(format!("{}={}", key, canonicalize_token(v, is_shape)));

@@ -238,7 +238,14 @@ mod tests {
             },
             &[],
         );
-        let cmd = r.updated_input.unwrap().get("command").unwrap().as_str().unwrap().to_string();
+        let cmd = r
+            .updated_input
+            .unwrap()
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(cmd, "nid --shadow cargo build");
     }
 }

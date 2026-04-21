@@ -50,10 +50,7 @@ fn extract_payload(buf: &str) -> Result<PreToolPayload> {
         .unwrap_or("")
         .to_string();
 
-    let shadow = v
-        .get("shadow")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
+    let shadow = v.get("shadow").and_then(|b| b.as_bool()).unwrap_or(false);
     Ok(PreToolPayload {
         tool_name,
         command,

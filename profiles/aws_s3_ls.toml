@@ -1,0 +1,13 @@
+# aws s3 ls — flat tabular output; strip ANSI, dedup.
+[meta]
+fingerprint = "aws s3 ls"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "tabular"
+description = "aws s3 ls output — already compact, just sanitize."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"

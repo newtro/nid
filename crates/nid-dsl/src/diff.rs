@@ -11,9 +11,7 @@
 //! This is a lightweight deterministic floor — it ALWAYS produces a valid DSL,
 //! even when no LLM backend is available.
 
-use crate::ast::{
-    FormatClaim, Invariant, InvariantCheck, Meta, Profile, Rule, RuleKind,
-};
+use crate::ast::{FormatClaim, Invariant, InvariantCheck, Meta, Profile, Rule, RuleKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineClass {
@@ -33,7 +31,9 @@ pub fn classify_lines(samples: &[&str]) -> Vec<LineClass> {
         .iter()
         .enumerate()
         .map(|(i, line)| {
-            let constant_across = others.iter().all(|o| o.get(i).map(|v| *v == *line).unwrap_or(false));
+            let constant_across = others
+                .iter()
+                .all(|o| o.get(i).map(|v| *v == *line).unwrap_or(false));
             if constant_across {
                 LineClass::Constant
             } else {
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn synthesize_produces_valid_profile() {
         let samples = ["A\nerror: boom\nZ\n", "A\ninfo: ok\nZ\n"];
-        let refs: Vec<&str> = samples.iter().map(|s| *s).collect();
+        let refs: Vec<&str> = samples.to_vec();
         let p = synthesize("test", &refs);
         crate::validator::validate_profile(&p).expect("synthesized must validate");
         assert_eq!(p.meta.fingerprint, "test");
@@ -168,6 +168,9 @@ mod tests {
         let s1 = "same\nalpha\nend";
         let s2 = "same\nbeta\nend";
         let c = classify_lines(&[s1, s2]);
-        assert_eq!(c, vec![LineClass::Constant, LineClass::Varying, LineClass::Constant]);
+        assert_eq!(
+            c,
+            vec![LineClass::Constant, LineClass::Varying, LineClass::Constant]
+        );
     }
 }

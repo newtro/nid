@@ -1,0 +1,6 @@
+/home/alice/proj/src/foo.js
+  12:5  error  'x' is assigned a value but never used  no-unused-vars
+  42:1  warning  Missing semicolon  semi
+/home/alice/proj/src/bar.js
+  7:10  error  Unexpected use of 'eval'  no-eval
+✖ 3 problems (2 errors, 1 warning)

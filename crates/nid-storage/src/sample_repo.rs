@@ -73,7 +73,6 @@ impl<'a> SampleRepo<'a> {
                 [fingerprint],
                 |r| r.get(0),
             )
-            .map_err(Into::into)
         })
     }
 }

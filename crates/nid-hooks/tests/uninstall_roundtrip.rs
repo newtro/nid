@@ -35,8 +35,10 @@ fn uninstall_deletes_config_that_did_not_exist_before() {
     let backup = home.join("backup.json");
 
     let det = stub_detected(&home);
-    let mut opts = OnboardOptions::default();
-    opts.agents = Some(vec![AgentKind::ClaudeCode]);
+    let opts = OnboardOptions {
+        agents: Some(vec![AgentKind::ClaudeCode]),
+        ..Default::default()
+    };
     let plan = onboard::plan(&det, &opts, backup.clone());
     installer::apply(&plan, "/opt/nid/bin/nid").unwrap();
 
@@ -49,7 +51,8 @@ fn uninstall_deletes_config_that_did_not_exist_before() {
     // To keep the test self-contained we instead perform the restore manually
     // from the backup we just wrote.
     let backup_body = fs::read_to_string(&backup).unwrap();
-    let backup_data: nid_hooks::onboard::OnboardBackup = serde_json::from_str(&backup_body).unwrap();
+    let backup_data: nid_hooks::onboard::OnboardBackup =
+        serde_json::from_str(&backup_body).unwrap();
     for (agent_str, original) in &backup_data.originals {
         let Some(kind) = AgentKind::all().iter().find(|k| k.as_str() == agent_str) else {
             continue;
@@ -66,7 +69,10 @@ fn uninstall_deletes_config_that_did_not_exist_before() {
             }
         }
     }
-    assert!(!cc_path.exists(), "uninstall should remove the config that didn't exist before");
+    assert!(
+        !cc_path.exists(),
+        "uninstall should remove the config that didn't exist before"
+    );
 }
 
 #[test]
@@ -84,8 +90,10 @@ fn uninstall_restores_byte_perfect_when_file_existed() {
     fs::write(&cc_path, original).unwrap();
 
     let det = stub_detected(&home);
-    let mut opts = OnboardOptions::default();
-    opts.agents = Some(vec![AgentKind::ClaudeCode]);
+    let opts = OnboardOptions {
+        agents: Some(vec![AgentKind::ClaudeCode]),
+        ..Default::default()
+    };
     let backup = home.join("backup.json");
     let plan = onboard::plan(&det, &opts, backup.clone());
     installer::apply(&plan, "/opt/nid/bin/nid").unwrap();
@@ -96,9 +104,13 @@ fn uninstall_restores_byte_perfect_when_file_existed() {
 
     // Manual restore (as above).
     let backup_body = fs::read_to_string(&backup).unwrap();
-    let backup_data: nid_hooks::onboard::OnboardBackup = serde_json::from_str(&backup_body).unwrap();
+    let backup_data: nid_hooks::onboard::OnboardBackup =
+        serde_json::from_str(&backup_body).unwrap();
     for (agent_str, orig) in &backup_data.originals {
-        let kind = AgentKind::all().iter().find(|k| k.as_str() == agent_str).unwrap();
+        let kind = AgentKind::all()
+            .iter()
+            .find(|k| k.as_str() == agent_str)
+            .unwrap();
         let path = kind.default_config_path(&home);
         match orig {
             Some(b) => fs::write(&path, b).unwrap(),

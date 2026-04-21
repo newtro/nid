@@ -44,7 +44,6 @@ impl<'a> FidelityRepo<'a> {
                 [profile_id],
                 |r| r.get(0),
             )
-            .map_err(Into::into)
         })
     }
 }
@@ -94,8 +93,16 @@ mod tests {
             .unwrap();
 
         let repo = FidelityRepo::new(&db);
-        repo.record(Some("s1"), pid, "invariant_pass", Some("Foo"), None, None, None)
-            .unwrap();
+        repo.record(
+            Some("s1"),
+            pid,
+            "invariant_pass",
+            Some("Foo"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
         repo.record(
             Some("s1"),
             pid,

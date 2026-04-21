@@ -82,9 +82,7 @@ fn validate_rule(index: usize, rule: &Rule) -> Result<(), ValidationError> {
         RuleKind::KeepLines { match_ } | RuleKind::DropLines { match_ } => {
             check_regex(index, "keep/drop_lines", match_)
         }
-        RuleKind::CollapseRepeated {
-            pattern, min, ..
-        } => {
+        RuleKind::CollapseRepeated { pattern, min, .. } => {
             if *min < 2 {
                 return Err(ValidationError::CollapseMinTooSmall);
             }
@@ -259,7 +257,12 @@ mod tests {
 
     #[test]
     fn valid_minimal_profile() {
-        let p = base(vec![Rule { kind: RuleKind::Dedup }], vec![]);
+        let p = base(
+            vec![Rule {
+                kind: RuleKind::Dedup,
+            }],
+            vec![],
+        );
         validate_profile(&p).unwrap();
     }
 
@@ -305,8 +308,16 @@ mod tests {
 
     #[test]
     fn rejects_zero_head() {
-        let p = base(vec![Rule { kind: RuleKind::Head { n: 0 } }], vec![]);
-        assert!(matches!(validate_profile(&p), Err(ValidationError::HeadTailZero)));
+        let p = base(
+            vec![Rule {
+                kind: RuleKind::Head { n: 0 },
+            }],
+            vec![],
+        );
+        assert!(matches!(
+            validate_profile(&p),
+            Err(ValidationError::HeadTailZero)
+        ));
     }
 
     #[test]

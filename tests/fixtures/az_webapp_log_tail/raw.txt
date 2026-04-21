@@ -1,0 +1,4 @@
+2026-04-21T10:00:00Z INFO  Starting host
+2026-04-21T10:00:01Z INFO  Connection opened
+2026-04-21T10:00:02Z WARN  Slow query: 412ms
+2026-04-21T10:00:03Z ERROR 500 returned from /api/v1/ingest

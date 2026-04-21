@@ -39,7 +39,10 @@ pub fn builtin_patterns() -> Vec<Pattern> {
         pattern!("gitlab_token", r"glpat-[A-Za-z0-9_-]{20,}"),
         pattern!("stripe_live", r"sk_live_[A-Za-z0-9]{20,}"),
         pattern!("stripe_test", r"sk_test_[A-Za-z0-9]{20,}"),
-        pattern!("jwt", r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.+/=-]{10,}"),
+        pattern!(
+            "jwt",
+            r"eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.+/=-]{10,}"
+        ),
         pattern!(
             "bearer_header",
             r"(?i)(authorization|auth)\s*:\s*bearer\s+[A-Za-z0-9._~+/=-]{20,}"
@@ -155,7 +158,8 @@ mod tests {
 
     #[test]
     fn jwt_redacted() {
-        let s = "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf here";
+        let s =
+            "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf here";
         let out = redact(s);
         assert!(out.contains("[REDACTED:jwt]"), "out={out}");
     }
@@ -171,7 +175,10 @@ mod tests {
     fn ssh_private_key_redacted() {
         let s = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc123def\n-----END OPENSSH PRIVATE KEY-----";
         let out = redact(s);
-        assert!(out.contains("[REDACTED:ssh_private_key_block]"), "out={out}");
+        assert!(
+            out.contains("[REDACTED:ssh_private_key_block]"),
+            "out={out}"
+        );
     }
 
     #[test]

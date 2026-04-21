@@ -55,9 +55,7 @@ enum Command {
     /// Internal: per-agent hook handler. Reads PreTool JSON from stdin and
     /// emits a rewrite response on stdout.
     #[command(hide = true, name = "__hook")]
-    Hook {
-        agent: String,
-    },
+    Hook { agent: String },
 }
 
 #[tokio::main(flavor = "current_thread")]

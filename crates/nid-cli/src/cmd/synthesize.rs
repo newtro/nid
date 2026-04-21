@@ -9,7 +9,7 @@ use nid_storage::{
     sample_repo::SampleRepo,
     Db,
 };
-use nid_synthesis::{lockin, orchestrator::synthesize_from_samples};
+use nid_synthesis::{autodetect, lockin, orchestrator::synthesize_from_samples};
 
 #[derive(Debug, Args)]
 pub struct SynthesizeArgs {
@@ -54,24 +54,34 @@ pub async fn run(args: SynthesizeArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("synthesizing from {} sample(s) for `{fp}`...", samples.len());
+    println!(
+        "synthesizing from {} sample(s) for `{fp}`...",
+        samples.len()
+    );
 
-    // Phase 6 will plug in a real LLM backend. For now: structural-diff only.
-    let out = synthesize_from_samples(&fp, &samples, |_prompt| async { Ok(None) }).await?;
+    // Auto-detect a configured LLM backend; fall back to structural-diff-only.
+    let backend = autodetect();
+    println!("  backend: {:?}", backend.kind());
+    let out = synthesize_from_samples(&fp, &samples, |prompt| async move {
+        backend.refine(&prompt).await
+    })
+    .await?;
     validator::validate_profile(&out.profile)?;
 
     // Self-test: compressing each sample with this profile must pass every
     // listed invariant.
     for (i, s) in samples.iter().enumerate() {
         let compressed = nid_dsl::interpreter::apply_rules(s, &out.profile.rules).to_string();
-        let results = nid_dsl::invariants::check_invariants(
-            &out.profile.invariants,
-            s,
-            &compressed,
-        )?;
+        let results =
+            nid_dsl::invariants::check_invariants(&out.profile.invariants, s, &compressed)?;
         for r in &results {
             if !r.passed {
-                anyhow::bail!("invariant `{}` failed on sample {}: {:?}", r.name, i, r.detail);
+                anyhow::bail!(
+                    "invariant `{}` failed on sample {}: {:?}",
+                    r.name,
+                    i,
+                    r.detail
+                );
             }
         }
     }

@@ -1,0 +1,19 @@
+# make — keep error/warning lines + final status; drop echoed command noise.
+[meta]
+fingerprint = "make"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve make errors and status output."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(make(\[[0-9]+\])?: |gcc |cc |ld |Error |\S+:[0-9]+:[0-9]+: (error|warning|note))'
+
+[[invariants]]
+name = "ErrorLinesPreserved"
+check = "all_matching_preserved"
+pattern = "(?i)error"

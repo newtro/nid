@@ -1,0 +1,19 @@
+# ruff (Python linter) — keep path:line:col: rule: msg lines and final summary.
+[meta]
+fingerprint = "ruff check <path>"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve ruff lint lines and final count."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(\S+\.py:[0-9]+:[0-9]+:\s+[A-Z][0-9]+|Found [0-9]+ error)'
+
+[[invariants]]
+name = "LintLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^\\S+\\.py:[0-9]+:[0-9]+:"

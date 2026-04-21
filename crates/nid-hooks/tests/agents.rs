@@ -22,7 +22,14 @@ fn every_agent_rewrites_basic_bash_command() {
             "{:?}: should produce updatedInput",
             a
         );
-        let cmd = r.updated_input.unwrap().get("command").unwrap().as_str().unwrap().to_string();
+        let cmd = r
+            .updated_input
+            .unwrap()
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(cmd, "nid pytest -v", "agent {:?}", a);
     }
 }
@@ -31,16 +38,29 @@ fn every_agent_rewrites_basic_bash_command() {
 fn every_agent_idempotent_for_already_nid() {
     for a in AgentKind::all() {
         let r = handle_payload(&bash("nid pytest"), &[]);
-        assert!(r.updated_input.is_none(), "agent {:?} should be passthrough", a);
+        assert!(
+            r.updated_input.is_none(),
+            "agent {:?} should be passthrough",
+            a
+        );
     }
 }
 
 #[test]
 fn every_agent_skips_builtins() {
     for a in AgentKind::all() {
-        for b in ["cd /tmp", "export FOO=1", "source env.sh", "alias ll='ls -l'"] {
+        for b in [
+            "cd /tmp",
+            "export FOO=1",
+            "source env.sh",
+            "alias ll='ls -l'",
+        ] {
             let r = handle_payload(&bash(b), &[]);
-            assert!(r.updated_input.is_none(), "agent {:?} / cmd `{b}` should passthrough", a);
+            assert!(
+                r.updated_input.is_none(),
+                "agent {:?} / cmd `{b}` should passthrough",
+                a
+            );
         }
     }
 }
@@ -49,7 +69,14 @@ fn every_agent_skips_builtins() {
 fn every_agent_handles_pipelines_as_whole() {
     for a in AgentKind::all() {
         let r = handle_payload(&bash("pytest | tee log.txt | grep FAIL"), &[]);
-        let cmd = r.updated_input.unwrap().get("command").unwrap().as_str().unwrap().to_string();
+        let cmd = r
+            .updated_input
+            .unwrap()
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(cmd, "nid pytest | tee log.txt | grep FAIL", "agent {:?}", a);
     }
 }
@@ -58,7 +85,14 @@ fn every_agent_handles_pipelines_as_whole() {
 fn nid_raw_env_unwraps_for_every_agent() {
     for a in AgentKind::all() {
         let r = handle_payload(&bash("NID_RAW=1 cargo build"), &[]);
-        let cmd = r.updated_input.unwrap().get("command").unwrap().as_str().unwrap().to_string();
+        let cmd = r
+            .updated_input
+            .unwrap()
+            .get("command")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
         assert_eq!(cmd, "cargo build", "agent {:?}", a);
     }
 }

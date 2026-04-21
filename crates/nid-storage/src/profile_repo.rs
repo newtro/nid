@@ -98,10 +98,7 @@ impl<'a> ProfileRepo<'a> {
                  WHERE fingerprint=?1 AND status='active' AND id != ?2",
                 params![fp, id],
             )?;
-            tx.execute(
-                "UPDATE profiles SET status='active' WHERE id = ?1",
-                [id],
-            )?;
+            tx.execute("UPDATE profiles SET status='active' WHERE id = ?1", [id])?;
             tx.commit()?;
             Ok(())
         })
@@ -109,7 +106,10 @@ impl<'a> ProfileRepo<'a> {
 
     pub fn set_status(&self, id: i64, status: &str) -> Result<(), DbError> {
         self.db.with_conn(|c| {
-            c.execute("UPDATE profiles SET status=?1 WHERE id=?2", params![status, id])?;
+            c.execute(
+                "UPDATE profiles SET status=?1 WHERE id=?2",
+                params![status, id],
+            )?;
             Ok(())
         })
     }
@@ -143,7 +143,9 @@ impl<'a> ProfileRepo<'a> {
                  FROM profiles
                  ORDER BY fingerprint, created_at DESC",
             )?;
-            let rows = s.query_map([], row_to_profile)?.collect::<Result<Vec<_>, _>>()?;
+            let rows = s
+                .query_map([], row_to_profile)?
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
     }
@@ -237,7 +239,9 @@ mod tests {
     fn insert_and_promote() {
         let db = Db::open_in_memory().unwrap();
         let repo = ProfileRepo::new(&db);
-        let id = repo.insert_pending(&np("git status", "1.0.0", "aaa")).unwrap();
+        let id = repo
+            .insert_pending(&np("git status", "1.0.0", "aaa"))
+            .unwrap();
         assert!(repo.active_for("git status").unwrap().is_none());
         repo.promote(id).unwrap();
         let row = repo.active_for("git status").unwrap().unwrap();

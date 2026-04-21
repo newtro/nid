@@ -1,0 +1,13 @@
+# gh pr list — tabular PR listing; strip ANSI + dedup.
+[meta]
+fingerprint = "gh pr list"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "tabular"
+description = "gh CLI PR listing — preserve as-is."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"

@@ -16,7 +16,10 @@ fn main() {
 
     let mut entries: Vec<(String, String)> = Vec::new();
     if profiles_root.is_dir() {
-        for entry in WalkDir::new(&profiles_root).into_iter().filter_map(|e| e.ok()) {
+        for entry in WalkDir::new(&profiles_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() {
                 continue;
             }

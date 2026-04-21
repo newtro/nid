@@ -1,0 +1,13 @@
+# az webapp log tail — streaming log lines; strip ANSI + dedup.
+[meta]
+fingerprint = "az webapp log tail"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "log"
+description = "Azure webapp tail — keep tagged log lines verbatim."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"

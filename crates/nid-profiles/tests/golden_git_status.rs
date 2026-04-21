@@ -58,10 +58,6 @@ fn git_status_profile_invariants_pass() {
     let out = interpreter::apply_rules(RAW, &profile.rules).to_string();
     let results = nid_dsl::invariants::check_invariants(&profile.invariants, RAW, &out).unwrap();
     for r in &results {
-        assert!(
-            r.passed,
-            "invariant `{}` failed: {:?}",
-            r.name, r.detail
-        );
+        assert!(r.passed, "invariant `{}` failed: {:?}", r.name, r.detail);
     }
 }

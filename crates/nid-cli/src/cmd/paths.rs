@@ -14,5 +14,5 @@ pub fn resolve() -> Result<NidPaths> {
             std::path::Path::new(&d),
         ));
     }
-    Ok(NidPaths::default_for_platform()?)
+    NidPaths::default_for_platform()
 }

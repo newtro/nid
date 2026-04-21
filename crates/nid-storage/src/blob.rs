@@ -82,7 +82,7 @@ impl<'a> BlobStore<'a> {
 
         if !existed {
             let path = self.blob_path(&sha);
-            let compressed = zstd::bulk::compress(data, 3).map_err(std::io::Error::from)?;
+            let compressed = zstd::bulk::compress(data, 3)?;
             // Atomic write: tmp → rename.
             let tmp = path.with_extension("tmp");
             {
@@ -109,8 +109,7 @@ impl<'a> BlobStore<'a> {
     pub fn get(&self, sha256: &str) -> Result<Vec<u8>, DbError> {
         let path = self.blob_path(sha256);
         let bytes = fs::read(&path)?;
-        let out = zstd::bulk::decompress(&bytes, 256 * 1024 * 1024)
-            .map_err(std::io::Error::from)?;
+        let out = zstd::bulk::decompress(&bytes, 256 * 1024 * 1024)?;
         // Verify integrity — content-addressed means the hash must match.
         let got = Self::hash(&out);
         if got != sha256 {
@@ -157,13 +156,9 @@ impl<'a> BlobStore<'a> {
     /// still has a file on disk. Returns bytes reclaimed.
     pub fn gc_orphans(&self) -> Result<u64, DbError> {
         let orphans: Vec<(String, i64)> = self.db.with_conn(|c| {
-            let mut s = c.prepare(
-                "SELECT sha256, size FROM blobs WHERE ref_count <= 0",
-            )?;
+            let mut s = c.prepare("SELECT sha256, size FROM blobs WHERE ref_count <= 0")?;
             let rows = s
-                .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
-                })?
+                .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })?;

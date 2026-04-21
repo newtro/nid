@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 /// Shell builtins that must never be wrapped — `nid cd ..` doesn't do anything
 /// useful (and would swallow the cd in a subshell).
 pub const BUILTINS: &[&str] = &[
-    "cd", "export", "set", "unset", "alias", "source", ".", "eval", "pwd", "echo",
-    "printf", "read", "exit", "return",
+    "cd", "export", "set", "unset", "alias", "source", ".", "eval", "pwd", "echo", "printf",
+    "read", "exit", "return",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,10 +20,7 @@ pub enum RewriteDecision {
         original: String,
     },
     /// Prepend `nid` with optional flags (e.g. `--shadow`).
-    Rewritten {
-        updated: String,
-        original: String,
-    },
+    Rewritten { updated: String, original: String },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,7 +35,10 @@ pub fn rewrite_command(cmd: &str, opts: &RewriteOptions) -> RewriteDecision {
     let trimmed = cmd.trim_start();
 
     // Rule 4: NID_RAW=1 escape hatch.
-    if let Some(rest) = trimmed.strip_prefix("NID_RAW=1 ").or(trimmed.strip_prefix("NID_RAW=1\t")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("NID_RAW=1 ")
+        .or(trimmed.strip_prefix("NID_RAW=1\t"))
+    {
         return RewriteDecision::Passthrough {
             reason: "nid_raw_escape",
             original: rest.to_string(),
@@ -95,7 +95,11 @@ fn starts_with_nid(s: &str) -> bool {
     }
     // Also detect absolute/relative paths that end with `nid` or `nid.exe`.
     if let Some(first) = s.split_ascii_whitespace().next() {
-        if first.ends_with("/nid") || first.ends_with("/nid.exe") || first.ends_with("\\nid") || first.ends_with("\\nid.exe") {
+        if first.ends_with("/nid")
+            || first.ends_with("/nid.exe")
+            || first.ends_with("\\nid")
+            || first.ends_with("\\nid.exe")
+        {
             return true;
         }
         // Windows: any path that resolves to the nid binary by basename.
@@ -116,7 +120,7 @@ fn first_token(s: &str) -> Option<&str> {
 
 fn first_token_is_builtin(s: &str) -> bool {
     match first_token(s) {
-        Some(t) => BUILTINS.iter().any(|b| *b == t),
+        Some(t) => BUILTINS.contains(&t),
         None => true, // empty command — passthrough
     }
 }
@@ -127,7 +131,8 @@ fn is_pure_pipeline_plumbing(s: &str) -> bool {
     let Some(first) = first_token(s) else {
         return false;
     };
-    if (first == "tee" || first == "cat") && (s.contains('>') || s.contains('|') || s.contains('<')) {
+    if (first == "tee" || first == "cat") && (s.contains('>') || s.contains('|') || s.contains('<'))
+    {
         return true;
     }
     false

@@ -12,7 +12,11 @@ pub struct LockinVerdict {
     pub reason: &'static str,
 }
 
-pub fn should_lock_in(samples: &[String], default_n: usize, fast_path_zero_variance: bool) -> LockinVerdict {
+pub fn should_lock_in(
+    samples: &[String],
+    default_n: usize,
+    fast_path_zero_variance: bool,
+) -> LockinVerdict {
     if samples.len() >= default_n {
         return LockinVerdict {
             should_lock: true,
@@ -87,7 +91,10 @@ mod tests {
             assert!(is_doubling_checkpoint(n, 5), "{n} should be a checkpoint");
         }
         for n in [6, 7, 15, 25, 30] {
-            assert!(!is_doubling_checkpoint(n, 5), "{n} should not be a checkpoint");
+            assert!(
+                !is_doubling_checkpoint(n, 5),
+                "{n} should not be a checkpoint"
+            );
         }
     }
 }

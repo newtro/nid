@@ -37,8 +37,17 @@ pub async fn run(args: OnboardArgs) -> Result<()> {
     if args.check {
         println!("nid onboard --check");
         for a in &detected.agents {
-            let status = if a.config_exists { "present" } else { "missing" };
-            println!("  {} [{}] at {}", a.kind.display_name(), status, a.config_path.display());
+            let status = if a.config_exists {
+                "present"
+            } else {
+                "missing"
+            };
+            println!(
+                "  {} [{}] at {}",
+                a.kind.display_name(),
+                status,
+                a.config_path.display()
+            );
         }
         println!(
             "  backends: anthropic={} ollama={} claude_cli={}",
@@ -73,10 +82,16 @@ pub async fn run(args: OnboardArgs) -> Result<()> {
                 }
                 println!("uninstalled + purged");
             } else {
-                println!("uninstalled (data preserved in {})", paths.data_dir.display());
+                println!(
+                    "uninstalled (data preserved in {})",
+                    paths.data_dir.display()
+                );
             }
         } else {
-            println!("no onboard backup found at {}", paths.onboard_backup.display());
+            println!(
+                "no onboard backup found at {}",
+                paths.onboard_backup.display()
+            );
         }
         return Ok(());
     }

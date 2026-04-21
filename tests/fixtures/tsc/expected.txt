@@ -1,0 +1,4 @@
+src/foo.ts(12,5): error TS2322: Type 'string' is not assignable to type 'number'.
+src/bar.ts(3,10): error TS2304: Cannot find name 'undefinedVariable'.
+src/baz.ts(7,1): warning TS6133: 'unusedImport' is declared but its value is never read.
+Found 3 errors in 3 files.

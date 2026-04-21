@@ -32,7 +32,11 @@ pub fn apply(plan: &OnboardPlan, nid_binary: &str) -> Result<OnboardBackup, Inst
     };
     for change in &plan.changes {
         let path = &change.config_path;
-        let original = if path.exists() { Some(fs::read_to_string(path)?) } else { None };
+        let original = if path.exists() {
+            Some(fs::read_to_string(path)?)
+        } else {
+            None
+        };
         backup
             .originals
             .insert(change.agent.as_str().to_string(), original.clone());
@@ -58,10 +62,7 @@ pub fn apply(plan: &OnboardPlan, nid_binary: &str) -> Result<OnboardBackup, Inst
 
     // Write the backup file.
     fs::create_dir_all(plan.backup_path.parent().unwrap_or(Path::new(".")))?;
-    atomic_write(
-        &plan.backup_path,
-        &serde_json::to_string_pretty(&backup)?,
-    )?;
+    atomic_write(&plan.backup_path, &serde_json::to_string_pretty(&backup)?)?;
     Ok(backup)
 }
 
@@ -220,8 +221,8 @@ fn unix_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::onboard::{plan, OnboardOptions};
     use crate::detect::{DetectedAgent, DetectedBackends, DetectionResult};
+    use crate::onboard::{plan, OnboardOptions};
     use tempfile::TempDir;
 
     fn stub_detected(home: &Path) -> DetectionResult {
@@ -242,8 +243,14 @@ mod tests {
     fn apply_writes_every_agent_config_and_backup() {
         let tmp = TempDir::new().unwrap();
         let det = stub_detected(tmp.path());
-        let mut opts = OnboardOptions::default();
-        opts.agents = Some(vec![AgentKind::ClaudeCode, AgentKind::Cursor, AgentKind::Aider]);
+        let opts = OnboardOptions {
+            agents: Some(vec![
+                AgentKind::ClaudeCode,
+                AgentKind::Cursor,
+                AgentKind::Aider,
+            ]),
+            ..Default::default()
+        };
         let backup_path = tmp.path().join("backup.json");
         let p = plan(&det, &opts, backup_path.clone());
         let _ = apply(&p, "/opt/nid/bin/nid").unwrap();
@@ -262,16 +269,20 @@ mod tests {
     fn apply_is_idempotent_on_second_run() {
         let tmp = TempDir::new().unwrap();
         let det = stub_detected(tmp.path());
-        let mut opts = OnboardOptions::default();
-        opts.agents = Some(vec![AgentKind::ClaudeCode]);
+        let opts = OnboardOptions {
+            agents: Some(vec![AgentKind::ClaudeCode]),
+            ..Default::default()
+        };
         let p = plan(&det, &opts, tmp.path().join("backup.json"));
         apply(&p, "/opt/nid/bin/nid").unwrap();
-        let after_first = fs::read_to_string(AgentKind::ClaudeCode.default_config_path(tmp.path())).unwrap();
+        let after_first =
+            fs::read_to_string(AgentKind::ClaudeCode.default_config_path(tmp.path())).unwrap();
 
         let det2 = stub_detected(tmp.path());
         let p2 = plan(&det2, &opts, tmp.path().join("backup.json"));
         apply(&p2, "/opt/nid/bin/nid").unwrap();
-        let after_second = fs::read_to_string(AgentKind::ClaudeCode.default_config_path(tmp.path())).unwrap();
+        let after_second =
+            fs::read_to_string(AgentKind::ClaudeCode.default_config_path(tmp.path())).unwrap();
 
         // Second apply must not duplicate the hook entry.
         let count = after_second.matches("/opt/nid/bin/nid").count();

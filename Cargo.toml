@@ -44,6 +44,7 @@ tempfile = "3"
 rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
+tar = "0.4"
 
 # Internal crates
 nid-core = { path = "crates/nid-core" }

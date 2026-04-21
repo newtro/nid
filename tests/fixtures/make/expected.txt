@@ -1,0 +1,6 @@
+make[1]: Entering directory '/home/alice/proj'
+gcc -c -o foo.o foo.c
+foo.c:12:5: error: 'undefined_symbol' undeclared (first use in this function)
+foo.c:12:5: note: each undeclared identifier is reported only once for each function it appears in
+make[1]: *** [Makefile:8: foo.o] Error 1
+make[1]: Leaving directory '/home/alice/proj'

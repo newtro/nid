@@ -4,15 +4,16 @@
 //! fingerprinting (Scheme R) that the dispatcher uses to route a command to
 //! a profile. No I/O, no subprocess, no filesystem.
 
-pub mod context;
 pub mod compressor;
+pub mod context;
 pub mod fingerprint;
 pub mod layers;
 pub mod redact;
 pub mod session;
+pub mod signing;
 
 pub use compressor::{
-    Applicability, Compressor, CompressionResult, CompressorMode, DroppedBlock, FormatKind,
+    Applicability, CompressionResult, Compressor, CompressorMode, DroppedBlock, FormatKind,
     InvariantResult,
 };
 pub use context::Context;

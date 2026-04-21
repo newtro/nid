@@ -1,0 +1,6 @@
+* main
+  feature/foo
+  feature/bar
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/feature/foo
+  remotes/origin/main

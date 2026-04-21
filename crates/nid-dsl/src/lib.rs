@@ -7,9 +7,11 @@ pub mod ast;
 pub mod diff;
 pub mod interpreter;
 pub mod invariants;
+pub mod nidprofile;
 pub mod validator;
 
 pub use ast::{FormatClaim, Invariant, InvariantCheck, Profile, Rule, RuleKind};
 pub use interpreter::{apply_rules, CompressedOutput};
 pub use invariants::{check_invariants, InvariantCheckError};
+pub use nidprofile::{pack, unpack_and_verify, NidProfileError, UnpackedProfile};
 pub use validator::{validate_profile, ValidationError};

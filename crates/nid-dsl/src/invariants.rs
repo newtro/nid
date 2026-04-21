@@ -28,7 +28,11 @@ pub fn check_invariants(
     Ok(out)
 }
 
-fn run_one(inv: &Invariant, raw: &str, compressed: &str) -> Result<InvariantResult, InvariantCheckError> {
+fn run_one(
+    inv: &Invariant,
+    raw: &str,
+    compressed: &str,
+) -> Result<InvariantResult, InvariantCheckError> {
     let (passed, detail) = match &inv.check {
         InvariantCheck::LastLineMatches { pattern } => {
             let re = mk(&inv.name, pattern)?;
@@ -43,15 +47,17 @@ fn run_one(inv: &Invariant, raw: &str, compressed: &str) -> Result<InvariantResu
         InvariantCheck::AllMatchingPreserved { pattern } => {
             let re = mk(&inv.name, pattern)?;
             let raw_matches: Vec<&str> = raw.lines().filter(|l| re.is_match(l)).collect();
-            let cmp_matches: Vec<&str> =
-                compressed.lines().filter(|l| re.is_match(l)).collect();
+            let cmp_matches: Vec<&str> = compressed.lines().filter(|l| re.is_match(l)).collect();
             let missing: Vec<&&str> = raw_matches
                 .iter()
                 .filter(|l| !cmp_matches.iter().any(|c| c == *l))
                 .collect();
             let passed = missing.is_empty();
             let detail = if !passed {
-                Some(format!("{} matching lines missing from compressed", missing.len()))
+                Some(format!(
+                    "{} matching lines missing from compressed",
+                    missing.len()
+                ))
             } else {
                 None
             };
@@ -67,14 +73,15 @@ fn run_one(inv: &Invariant, raw: &str, compressed: &str) -> Result<InvariantResu
             )
         }
         InvariantCheck::JsonPathExists { path } => {
-            let ok = matches!(serde_json::from_str::<serde_json::Value>(compressed), Ok(_))
+            let ok = serde_json::from_str::<serde_json::Value>(compressed).is_ok()
                 && json_exists(compressed, path);
             (ok, None)
         }
         InvariantCheck::ExitLinePreserved => {
             // Look for either an explicit `exit: N` line or a "Process exited"
             // in raw; if present, it must also be in compressed.
-            let pat = Regex::new(r"(?i)^(exit[: ]|process exited|command failed|error code)").unwrap();
+            let pat =
+                Regex::new(r"(?i)^(exit[: ]|process exited|command failed|error code)").unwrap();
             let raw_has = raw.lines().any(|l| pat.is_match(l));
             if !raw_has {
                 (true, None)

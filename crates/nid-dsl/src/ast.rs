@@ -63,15 +63,9 @@ pub enum RuleKind {
     /// Keep the last `n` lines only.
     Tail { n: usize },
     /// Keep the first `n` lines that follow the first line matching `after_match`.
-    HeadAfter {
-        n: usize,
-        after_match: String,
-    },
+    HeadAfter { n: usize, after_match: String },
     /// Keep the last `n` lines that precede the first line matching `before_match`.
-    TailBefore {
-        n: usize,
-        before_match: String,
-    },
+    TailBefore { n: usize, before_match: String },
     /// Deduplicate adjacent identical lines.
     Dedup,
     /// Remove ANSI color/cursor control sequences.
@@ -81,7 +75,10 @@ pub enum RuleKind {
     /// (JSON) drop these JSONPath-ish expressions.
     JsonPathDrop { paths: Vec<String> },
     /// (NDJSON) keep objects matching `field == value` predicates; drop others.
-    NdjsonFilter { field: String, keep_values: Vec<String> },
+    NdjsonFilter {
+        field: String,
+        keep_values: Vec<String>,
+    },
     /// Bounded state-machine — used for section-oriented output like git status.
     StateMachine { states: Vec<StateDef> },
     /// Truncate the whole output to at most `bytes` with an elision marker.
@@ -114,13 +111,24 @@ pub struct Rule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "check", rename_all = "snake_case")]
 pub enum InvariantCheck {
-    LastLineMatches { pattern: String },
-    FirstLineMatches { pattern: String },
+    LastLineMatches {
+        pattern: String,
+    },
+    FirstLineMatches {
+        pattern: String,
+    },
     /// Every line in *input* matching `pattern` must also appear in *output*.
-    AllMatchingPreserved { pattern: String },
+    AllMatchingPreserved {
+        pattern: String,
+    },
     /// At least `count` lines in output must match `pattern`.
-    CountMatchesAtLeast { pattern: String, count: usize },
-    JsonPathExists { path: String },
+    CountMatchesAtLeast {
+        pattern: String,
+        count: usize,
+    },
+    JsonPathExists {
+        path: String,
+    },
     ExitLinePreserved,
 }
 

@@ -43,6 +43,9 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     }
     let paths = crate::cmd::paths::resolve()?;
     paths.ensure()?;
+    // Honour the shadow state file: `nid shadow enable` persists intent across
+    // invocations independent of the --shadow flag.
+    let shadow = shadow || crate::cmd::shadow::is_shadow_enabled(&paths.config_dir);
 
     let fp = fingerprint(&argv);
     let id = SessionId::new_random();
@@ -59,17 +62,18 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     let profile_repo = ProfileRepo::new(&db);
     let sample_repo = SampleRepo::new(&db);
 
-    let (profile, profile_id): (Option<Profile>, Option<i64>) = match resolve_profile_with_id(&profile_repo, &store, &fp)? {
-        Some((p, id)) => (Some(p), Some(id)),
-        None => {
-            let bundled = nid_profiles::load_all();
-            let p = bundled
-                .into_iter()
-                .find(|(_, p)| p.meta.fingerprint == fp)
-                .map(|(_, p)| p);
-            (p, None)
-        }
-    };
+    let (profile, profile_id): (Option<Profile>, Option<i64>) =
+        match resolve_profile_with_id(&profile_repo, &store, &fp)? {
+            Some((p, id)) => (Some(p), Some(id)),
+            None => {
+                let bundled = nid_profiles::load_all();
+                let p = bundled
+                    .into_iter()
+                    .find(|(_, p)| p.meta.fingerprint == fp)
+                    .map(|(_, p)| p);
+                (p, None)
+            }
+        };
 
     // Spawn + capture.
     let cmd_str = argv.join(" ");
@@ -121,22 +125,52 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     let mut failed_invariants: Vec<String> = Vec::new();
     let fidelity_repo = FidelityRepo::new(&db);
     if let (Some(p), Some(pid)) = (&profile, profile_id) {
-        if let Ok(results) = nid_dsl::invariants::check_invariants(&p.invariants, &raw_redacted, &compressed) {
+        if let Ok(results) =
+            nid_dsl::invariants::check_invariants(&p.invariants, &raw_redacted, &compressed)
+        {
             let total = results.len().max(1) as f32;
             let passed = results.iter().filter(|r| r.passed).count() as f32;
             self_fidelity = passed / total;
             for r in &results {
-                let kind = if r.passed { "invariant_pass" } else { "invariant_fail" };
-                let _ = fidelity_repo.record(Some(id.as_str()), pid, kind, Some(&r.name), None, None, r.detail.as_deref());
+                let kind = if r.passed {
+                    "invariant_pass"
+                } else {
+                    "invariant_fail"
+                };
+                let _ = fidelity_repo.record(
+                    Some(id.as_str()),
+                    pid,
+                    kind,
+                    Some(&r.name),
+                    None,
+                    None,
+                    r.detail.as_deref(),
+                );
                 if !r.passed {
                     failed_invariants.push(r.name.clone());
                 }
             }
         }
         let s = structural_subset_check(&raw_redacted, &compressed);
-        let kind = if s.passed { "structural_pass" } else { "structural_fail" };
-        let detail = if s.passed { None } else { Some(format!("{} invented line(s)", s.invented_lines.len())) };
-        let _ = fidelity_repo.record(Some(id.as_str()), pid, kind, None, None, None, detail.as_deref());
+        let kind = if s.passed {
+            "structural_pass"
+        } else {
+            "structural_fail"
+        };
+        let detail = if s.passed {
+            None
+        } else {
+            Some(format!("{} invented line(s)", s.invented_lines.len()))
+        };
+        let _ = fidelity_repo.record(
+            Some(id.as_str()),
+            pid,
+            kind,
+            None,
+            None,
+            None,
+            detail.as_deref(),
+        );
     }
 
     let repo = SessionRepo::new(&db);
@@ -191,8 +225,14 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         }
         println!(
             "[nid: profile {}/v{}, fidelity {:.2}, mode={}, raw via nid show {}]",
-            profile.as_ref().map(|p| p.meta.fingerprint.as_str()).unwrap_or("<none>"),
-            profile.as_ref().map(|p| p.meta.version.as_str()).unwrap_or("-"),
+            profile
+                .as_ref()
+                .map(|p| p.meta.fingerprint.as_str())
+                .unwrap_or("<none>"),
+            profile
+                .as_ref()
+                .map(|p| p.meta.version.as_str())
+                .unwrap_or("-"),
             self_fidelity,
             mode,
             id
@@ -227,7 +267,10 @@ fn install_sigterm_trap(flag: Arc<AtomicBool>) {
     });
 }
 
-async fn spawn_and_capture(argv: &[String], _interrupted: Arc<AtomicBool>) -> Result<(i32, String)> {
+async fn spawn_and_capture(
+    argv: &[String],
+    _interrupted: Arc<AtomicBool>,
+) -> Result<(i32, String)> {
     let joined = argv.join(" ");
     let mut shell_cmd: TokioCommand = if cfg!(target_os = "windows") {
         let mut c = TokioCommand::new("cmd");
@@ -281,8 +324,8 @@ fn resolve_profile_with_id(
         return Ok(None);
     };
     let bytes = store.get(&row.dsl_blob_sha256)?;
-    let toml_src = std::str::from_utf8(&bytes)
-        .map_err(|e| anyhow::anyhow!("profile blob not UTF-8: {e}"))?;
+    let toml_src =
+        std::str::from_utf8(&bytes).map_err(|e| anyhow::anyhow!("profile blob not UTF-8: {e}"))?;
     let p = Profile::from_toml(toml_src).map_err(|e| anyhow::anyhow!("profile parse: {e}"))?;
     let _ = repo.record_use(row.id);
     Ok(Some((p, row.id)))

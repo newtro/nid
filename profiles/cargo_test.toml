@@ -1,0 +1,24 @@
+# cargo test — keep test-name + PASS/FAIL + Finished summary.
+[meta]
+fingerprint = "cargo test"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve test runner summary lines, per-test results, compile errors."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(test |running |test result|\s+Running|\s+Finished|\s+Compiling .* failed|error|warning|failures:|---- )'
+
+[[rules]]
+kind = "drop_lines"
+match = '^\s+Compiling\b'
+
+[[invariants]]
+name = "TestResultPreserved"
+check = "count_matches_at_least"
+pattern = "^test result"
+count = 1

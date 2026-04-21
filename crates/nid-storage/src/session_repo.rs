@@ -138,7 +138,6 @@ impl<'a> SessionRepo<'a> {
                 },
             )
             .optional()
-            .map_err(Into::into)
         })
     }
 
@@ -259,8 +258,19 @@ mod tests {
             started_at: 100,
         })
         .unwrap();
-        repo.finalize("s1", 110, 0, Some("raw1"), Some("cmp1"), 1, 1, 0, "e", "Full")
-            .unwrap();
+        repo.finalize(
+            "s1",
+            110,
+            0,
+            Some("raw1"),
+            Some("cmp1"),
+            1,
+            1,
+            0,
+            "e",
+            "Full",
+        )
+        .unwrap();
 
         let purged = repo.purge_older_than(200).unwrap();
         assert_eq!(purged.len(), 1);

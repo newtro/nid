@@ -1,0 +1,19 @@
+# mypy — keep error/note/success lines.
+[meta]
+fingerprint = "mypy <path>"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve mypy error/note lines and final summary."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(\S+\.py:[0-9]+:\s+(error|note|warning)|Found [0-9]+ error|Success: )'
+
+[[invariants]]
+name = "ErrorLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^\\S+\\.py:[0-9]+:\\s+error"

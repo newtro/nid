@@ -103,7 +103,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn falls_back_when_refiner_returns_none() {
-        let samples = vec!["start\nerror: x\nend\n".into(), "start\ninfo: y\nend\n".into()];
+        let samples = vec![
+            "start\nerror: x\nend\n".into(),
+            "start\ninfo: y\nend\n".into(),
+        ];
         let out = synthesize_from_samples("test", &samples, |_| async { Ok(None) })
             .await
             .unwrap();

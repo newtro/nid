@@ -40,9 +40,8 @@ fn catches_stripe_test_key() {
 
 #[test]
 fn catches_jwt_triplet() {
-    let out = redact(
-        "bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.SflKxwRJSMeKKF2QT4fwpMeJf_abc123",
-    );
+    let out =
+        redact("bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.SflKxwRJSMeKKF2QT4fwpMeJf_abc123");
     assert!(out.contains("[REDACTED:jwt]"), "{out}");
 }
 
@@ -51,10 +50,7 @@ fn catches_ssh_private_key_block() {
     let out = redact(
         "-----BEGIN OPENSSH PRIVATE KEY-----\nlinesoftext\n-----END OPENSSH PRIVATE KEY-----",
     );
-    assert!(
-        out.contains("[REDACTED:ssh_private_key_block]"),
-        "{out}"
-    );
+    assert!(out.contains("[REDACTED:ssh_private_key_block]"), "{out}");
 }
 
 #[test]
@@ -66,13 +62,8 @@ fn catches_bearer_header() {
 #[test]
 fn catches_high_entropy_token() {
     // High-entropy generic secret (aspirational catch-all).
-    let out = redact(
-        "secret: Xk9mPqRtUvWyZa23bCdE8fGh4iJ6kLmN5oPqR9sTu8vW9x very random",
-    );
-    assert!(
-        out.contains("[REDACTED:high_entropy]"),
-        "{out}"
-    );
+    let out = redact("secret: Xk9mPqRtUvWyZa23bCdE8fGh4iJ6kLmN5oPqR9sTu8vW9x very random");
+    assert!(out.contains("[REDACTED:high_entropy]"), "{out}");
 }
 
 #[test]

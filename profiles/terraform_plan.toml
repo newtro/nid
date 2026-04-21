@@ -1,0 +1,20 @@
+# terraform plan — keep resource-action lines + summary.
+[meta]
+fingerprint = "terraform plan"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve resource actions + final apply/destroy/add summary."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(\s*# |Plan: [0-9]+ to add|Error:|Warning:|Terraform will perform|No changes|\s*[+~-] resource|\s*<= data)'
+
+[[invariants]]
+name = "PlanSummaryPreserved"
+check = "count_matches_at_least"
+pattern = "^Plan: [0-9]+"
+count = 1

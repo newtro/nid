@@ -13,9 +13,7 @@
 //! full per-format strategies are in nid-dsl bundled profiles. What Layer 2
 //! provides here is the classifier + a small set of format-specific drops.
 
-use crate::compressor::{
-    Applicability, Compressor, CompressionResult, CompressorMode, FormatKind,
-};
+use crate::compressor::{Applicability, CompressionResult, Compressor, CompressorMode, FormatKind};
 use crate::context::Context;
 use crate::session::SessionRef;
 use regex::Regex;
@@ -45,7 +43,10 @@ pub fn detect_format(preview: &[u8]) -> FormatKind {
     }
 
     // Unified diff.
-    if s.lines().any(|l| l.starts_with("@@ ")) && s.lines().any(|l| l.starts_with("diff --git") || l.starts_with("--- ") || l.starts_with("+++ ")) {
+    if s.lines().any(|l| l.starts_with("@@ "))
+        && s.lines()
+            .any(|l| l.starts_with("diff --git") || l.starts_with("--- ") || l.starts_with("+++ "))
+    {
         return FormatKind::Diff;
     }
 

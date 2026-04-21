@@ -21,7 +21,10 @@ kind = "keep_lines"
 match = "(\\w+)\\1"
 "#;
     let err = try_validate(src).unwrap_err();
-    assert!(err.contains("backreference") || err.contains("Forbidden") || err.contains("forbidden"), "err={err}");
+    assert!(
+        err.contains("backreference") || err.contains("Forbidden") || err.contains("forbidden"),
+        "err={err}"
+    );
 }
 
 #[test]
@@ -66,7 +69,10 @@ kind = "state_machine"
 states = []
 "#;
     let err = try_validate(src).unwrap_err();
-    assert!(err.contains("empty") || err.contains("EmptyStateMachine"), "err={err}");
+    assert!(
+        err.contains("empty") || err.contains("EmptyStateMachine"),
+        "err={err}"
+    );
 }
 
 #[test]

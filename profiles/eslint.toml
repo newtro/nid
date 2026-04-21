@@ -1,0 +1,20 @@
+# eslint (default formatter) — keep file headers + error/warning lines + summary.
+[meta]
+fingerprint = "eslint"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve lint errors with file/location + final count."
+
+[[rules]]
+kind = "strip_ansi"
+
+# ESLint default stylish: path on its own line, then "  <line>:<col>  <level>  msg  rule".
+[[rules]]
+kind = "keep_lines"
+match = '^(/|\./|\.\./|[A-Za-z]:[/\\]|  [0-9]+:[0-9]+\s+(error|warning)|\xE2\x9C\x96 [0-9]+ problems?|[✖] [0-9]+ problems?)'
+
+[[invariants]]
+name = "ErrorLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^  [0-9]+:[0-9]+\\s+error"

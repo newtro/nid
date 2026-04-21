@@ -22,7 +22,10 @@ pub fn load_all() -> Vec<(String, Profile)> {
 
 /// All bundled fingerprints (useful for `nid profiles list`).
 pub fn fingerprints() -> Vec<String> {
-    load_all().into_iter().map(|(_, p)| p.meta.fingerprint).collect()
+    load_all()
+        .into_iter()
+        .map(|(_, p)| p.meta.fingerprint)
+        .collect()
 }
 
 #[cfg(test)]

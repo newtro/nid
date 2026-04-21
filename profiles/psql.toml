@@ -1,0 +1,13 @@
+# psql (table-format output) — tabular, preserve as-is.
+[meta]
+fingerprint = "psql"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "tabular"
+description = "psql default table output — compact already."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"

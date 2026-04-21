@@ -40,15 +40,13 @@ pub struct CompressedOutput {
     pub bytes_out: usize,
 }
 
-impl CompressedOutput {
-    pub fn to_string(&self) -> String {
-        let mut out = String::with_capacity(self.bytes_out);
+impl std::fmt::Display for CompressedOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for l in &self.lines {
-            out.push_str(l.as_str());
-            out.push('\n');
+            f.write_str(l.as_str())?;
+            f.write_str("\n")?;
         }
-        // Drop final newline if input didn't have one — harmless in practice; we always add \n between lines.
-        out
+        Ok(())
     }
 }
 
@@ -161,12 +159,7 @@ fn strip_ansi(lines: Vec<Line>) -> Vec<Line> {
         .collect()
 }
 
-fn collapse_repeated(
-    lines: Vec<Line>,
-    pattern: &str,
-    placeholder: &str,
-    min: usize,
-) -> Vec<Line> {
+fn collapse_repeated(lines: Vec<Line>, pattern: &str, placeholder: &str, min: usize) -> Vec<Line> {
     let re = compile(pattern);
     let mut out = Vec::with_capacity(lines.len());
     let mut run_start: Option<usize> = None;
@@ -202,12 +195,7 @@ fn collapse_repeated(
     out
 }
 
-fn collapse_between(
-    lines: Vec<Line>,
-    begin: &str,
-    end: &str,
-    placeholder: &str,
-) -> Vec<Line> {
+fn collapse_between(lines: Vec<Line>, begin: &str, end: &str, placeholder: &str) -> Vec<Line> {
     let bre = compile(begin);
     let ere = compile(end);
     let mut out = Vec::with_capacity(lines.len());
@@ -222,17 +210,15 @@ fn collapse_between(
             } else {
                 out.push(l);
             }
+        } else if l.is_verbatim() && ere.is_match(l.as_str()) {
+            out.push(Line::Placeholder {
+                text: placeholder.replace("{count}", &inside_count.to_string()),
+            });
+            out.push(l);
+            inside = false;
         } else {
-            if l.is_verbatim() && ere.is_match(l.as_str()) {
-                out.push(Line::Placeholder {
-                    text: placeholder.replace("{count}", &inside_count.to_string()),
-                });
-                out.push(l);
-                inside = false;
-            } else {
-                inside_count += 1;
-                // skip (collapsed)
-            }
+            inside_count += 1;
+            // skip (collapsed)
         }
     }
     // If we ended inside, still emit the placeholder so output reflects the collapse.
@@ -368,7 +354,6 @@ fn ndjson_filter(lines: Vec<Line>, field: &str, keep_values: &[String]) -> Vec<L
 fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
     // Compile all regexes up-front.
     struct Compiled {
-        name: String,
         enter: Regex,
         keep: Vec<Regex>,
         drop: Vec<Regex>,
@@ -376,7 +361,6 @@ fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
     let compiled: Vec<Compiled> = states
         .iter()
         .map(|s| Compiled {
-            name: s.name.clone(),
             enter: compile(&s.enter),
             keep: s.keep.iter().map(|r| compile(r)).collect(),
             drop: s.drop.iter().map(|r| compile(r)).collect(),
@@ -415,8 +399,6 @@ fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
             out.push(l);
         }
     }
-    // silence unused warnings from `name`
-    let _ = compiled.iter().map(|c| &c.name).count();
     out
 }
 
@@ -484,18 +466,16 @@ fn split_last_segment(path: &str) -> Option<(String, String)> {
     Some((parent, last))
 }
 
-fn json_walk_mut<'a>(v: &'a mut serde_json::Value, path: &str) -> Option<&'a mut serde_json::Value> {
+fn json_walk_mut<'a>(
+    v: &'a mut serde_json::Value,
+    path: &str,
+) -> Option<&'a mut serde_json::Value> {
     let mut cur: &mut serde_json::Value = v;
     let rest = path.strip_prefix('$').unwrap_or(path);
     let mut parts = vec![];
     let mut key = String::new();
     for c in rest.chars() {
-        if c == '.' {
-            if !key.is_empty() {
-                parts.push(key.clone());
-                key.clear();
-            }
-        } else if c == '[' || c == ']' {
+        if c == '.' || c == '[' || c == ']' {
             if !key.is_empty() {
                 parts.push(key.clone());
                 key.clear();
@@ -636,7 +616,7 @@ mod tests {
     fn head_after_keeps_first_n_after_anchor() {
         let input = "preamble\nstart\n1\n2\n3\n4\n";
         let out = apply_rules(
-            &input,
+            input,
             &[r(RuleKind::HeadAfter {
                 n: 2,
                 after_match: "^start$".into(),
@@ -662,7 +642,10 @@ mod tests {
                     StateDef {
                         name: "changes".into(),
                         enter: r"^Changes ".into(),
-                        keep: vec![r"^Changes ".into(), r"^\s+(modified|new file|deleted):".into()],
+                        keep: vec![
+                            r"^Changes ".into(),
+                            r"^\s+(modified|new file|deleted):".into(),
+                        ],
                         drop: vec![],
                     },
                     StateDef {

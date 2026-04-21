@@ -10,6 +10,7 @@ pub mod paths;
 pub mod profile_repo;
 pub mod sample_repo;
 pub mod session_repo;
+pub mod trust_repo;
 
 pub use blob::{BlobKind, BlobStore};
 pub use db::{Db, DbError};
