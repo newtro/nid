@@ -5,7 +5,7 @@
 //! 2. spawn child via shell; capture stdout+stderr.
 //! 3. redact secrets (pre-persistence).
 //! 4. Layer 1 generic cleanup, always.
-//! 5. Layer 3 (bundled DSL) if fingerprint matches, else Layer 2 format path.
+//! 5. Layer 3/5 DSL if fingerprint matches, else Layer 2 format path.
 //! 6. persist raw + compressed blobs, write session row.
 //! 7. emit compressed to stdout with attestation footer.
 //!
@@ -43,6 +43,8 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     }
     let paths = crate::cmd::paths::resolve()?;
     paths.ensure()?;
+    // Load user config (falls back to defaults if missing/malformed).
+    let cfg = nid_storage::config::load(&paths.config_dir);
     // Honour the shadow state file: `nid shadow enable` persists intent across
     // invocations independent of the --shadow flag.
     let shadow = shadow || crate::cmd::shadow::is_shadow_enabled(&paths.config_dir);
@@ -77,12 +79,40 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             }
         };
 
+    // Detect per-invocation bypass signals before we spawn.
+    let bypass_signals = detect_bypass_signals(&argv, &fp, &paths);
+
     // Spawn + capture.
     let cmd_str = argv.join(" ");
     let (exit_code, raw_out) = spawn_and_capture(&argv, interrupted.clone()).await?;
 
-    // Redact before persistence.
-    let raw_redacted = redact::redact(&raw_out);
+    // Redact before persistence. Config `allow_commands` opts a command out;
+    // `extra_patterns` adds to the built-ins.
+    let bin = argv
+        .first()
+        .and_then(|p| std::path::Path::new(p).file_stem())
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let redaction_on = !cfg
+        .security
+        .redaction
+        .allow_commands
+        .iter()
+        .any(|c| c == bin);
+    let raw_redacted = if redaction_on {
+        let mut out = redact::redact(&raw_out);
+        for pat in &cfg.security.redaction.extra_patterns {
+            if let Ok(re) = regex::Regex::new(pat) {
+                out = re.replace_all(&out, "[REDACTED:user]").into_owned();
+            }
+        }
+        out
+    } else {
+        raw_out.clone()
+    };
+
+    let preserve_raw =
+        cfg.session.preserve_raw && !cfg.session.deny_raw_commands.iter().any(|c| c == bin);
 
     // Layer 1 — always.
     let layer1 = Layer1Generic::default();
@@ -94,13 +124,9 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("layer1: {e}"))?;
     let after_layer1 = String::from_utf8_lossy(&l1_output).to_string();
 
-    // Tier B: try the profile (Layer 3/5), else run Layer 2 format-aware
-    // cleanup over the Layer-1 output.
+    // Tier B: profile (Layer 3/5), else Layer 2 format-aware cleanup.
     let compressed = match &profile {
-        Some(p) => {
-            let co = nid_dsl::interpreter::apply_rules(&after_layer1, &p.rules);
-            co.to_string()
-        }
+        Some(p) => nid_dsl::interpreter::apply_rules(&after_layer1, &p.rules).to_string(),
         None => {
             let format = detect_format(after_layer1.as_bytes());
             let l2 = nid_core::layers::Layer2Format { format };
@@ -108,19 +134,20 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             let mut l2_output: Vec<u8> = Vec::with_capacity(after_layer1.len());
             match l2.compress(&mut l2_input, &mut l2_output, &ctx) {
                 Ok(_) => String::from_utf8_lossy(&l2_output).to_string(),
-                // If Layer 2 fails for any reason, degrade to Layer-1 output —
-                // we never want to fail a wrapped command because of nid.
                 Err(_) => after_layer1.clone(),
             }
         }
     };
 
     // Persist.
-    let raw_sha = store.put(raw_redacted.as_bytes(), BlobKind::Raw)?;
+    let raw_sha = if preserve_raw {
+        Some(store.put(raw_redacted.as_bytes(), BlobKind::Raw)?)
+    } else {
+        None
+    };
     let cmp_sha = store.put(compressed.as_bytes(), BlobKind::Compressed)?;
 
-    // Phase 4: sample capture for unknown fingerprints. Cap at 64 samples per
-    // fingerprint to avoid runaway growth; lock-in decides when to synthesize.
+    // Sample capture + auto-synthesis on lock-in.
     let mut just_captured = false;
     if profile.is_none() {
         let count = sample_repo.count_for(&fp).unwrap_or(0);
@@ -130,18 +157,19 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             just_captured = true;
         }
     }
-
-    // C2 fix: auto-synthesis. If we just captured a sample for an unknown
-    // fingerprint, check whether the lock-in threshold is now met. If it is,
-    // kick off synthesis synchronously — it's cheap (structural-diff floor is
-    // fast; LLM refinement only fires if a backend is configured), and
-    // inlining here means the next invocation of the same command gets a
-    // real Layer 5 profile immediately.
     if just_captured && profile.is_none() {
-        let _ = try_auto_synthesize(&fp, &sample_repo, &store, &profile_repo).await;
+        let _ = try_auto_synthesize(
+            &fp,
+            &sample_repo,
+            &store,
+            &profile_repo,
+            cfg.synthesis.samples_to_lock,
+            cfg.synthesis.fast_path_if_zero_variance,
+        )
+        .await;
     }
 
-    // Phase 5 — Tier 1 invariants + Tier 2 structural subset.
+    // Phase 5 — Tier 1 invariants + Tier 2 structural subset + bypass signals.
     let mut self_fidelity = 1.0f32;
     let mut failed_invariants: Vec<String> = Vec::new();
     let fidelity_repo = FidelityRepo::new(&db);
@@ -192,6 +220,20 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             None,
             detail.as_deref(),
         );
+
+        for sig in &bypass_signals {
+            let weight = sig.weight();
+            let name = format!("{sig:?}");
+            let _ = fidelity_repo.record(
+                Some(id.as_str()),
+                pid,
+                "bypass_signal",
+                Some(&name),
+                Some(weight as f64),
+                Some(weight as f64),
+                None,
+            );
+        }
     }
 
     let repo = SessionRepo::new(&db);
@@ -223,7 +265,7 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         id.as_str(),
         ended,
         exit_code,
-        Some(&raw_sha),
+        raw_sha.as_deref(),
         Some(&cmp_sha),
         raw_redacted.len() as i64,
         compressed.len() as i64,
@@ -232,12 +274,25 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         mode,
     )?;
 
+    // Bump the gain-daily rollup (plan §12.1).
+    let _ = repo.bump_gain_daily(
+        raw_redacted.len() as i64,
+        compressed.len() as i64,
+        tokens_saved,
+    );
+
+    // Opportunistic exit-skew check (plan §8.3). Cheap (single SQL query);
+    // runs only when we have a profile.
+    if let Some(pid) = profile_id {
+        let _ = maybe_record_exit_skew(&db, &fp, pid, &fidelity_repo);
+    }
+
+    // Opportunistic retention purge (plan §12.3) — bounded.
+    let _ = opportunistic_retention_purge(&db, &store, &paths, cfg.session.retention_days);
+
     // Output.
     if shadow {
-        // Plan §14 — raw passthrough, counterfactual captured in the store.
-        // Emit the REDACTED raw (not the pre-redaction `raw_out`) so shadow
-        // mode doesn't leak secrets to the agent's context window.
-        // (Fixes H2 from the adversarial review.)
+        // Plan §14 — emit the REDACTED raw, not the pre-redaction output.
         print!("{raw_redacted}");
     } else {
         print!("{compressed}");
@@ -337,17 +392,130 @@ fn unix_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Auto-synthesis (plan §7.3): when a new sample puts the fingerprint at
-/// the lock-in threshold (N=5, or N=3 if samples are byte-identical), run
-/// the synthesis orchestrator, validate, self-test, and promote.
-///
-/// Inlined on the hot path. Kept best-effort: any error short-circuits to
-/// Ok(()) so a failed synth never breaks the wrapped command.
+/// Cheap per-invocation bypass-signal detection (plan §8.2).
+fn detect_bypass_signals(
+    argv: &[String],
+    fp: &str,
+    paths: &nid_storage::NidPaths,
+) -> Vec<nid_fidelity::BypassSignal> {
+    use nid_fidelity::BypassSignal;
+    let mut sigs = Vec::new();
+
+    if std::env::var("NID_RAW").ok().as_deref() == Some("1") {
+        sigs.push(BypassSignal::NidRawEnv);
+    }
+
+    let bin = argv
+        .first()
+        .and_then(|p| std::path::Path::new(p).file_stem())
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if matches!(bin, "cat" | "head" | "tail" | "less" | "more")
+        && argv
+            .iter()
+            .any(|a| a.contains("nid") || a.contains("sess_"))
+    {
+        sigs.push(BypassSignal::RawReFetch);
+    }
+    if matches!(bin, "grep" | "rg") {
+        sigs.push(BypassSignal::GrepAfterRead);
+    }
+
+    if let Ok(db) = Db::open(&paths.db_path) {
+        let sessions = SessionRepo::new(&db);
+        if let Ok(recents) = sessions.list_recent(3) {
+            let now = unix_now();
+            if recents
+                .iter()
+                .any(|s| s.fingerprint == fp && (now - s.started_at) <= 30)
+            {
+                sigs.push(BypassSignal::NearDuplicateReInvocation);
+            }
+        }
+    }
+
+    sigs
+}
+
+/// Plan §8.3 exit-code skew detection. Counts sessions in each bucket and
+/// computes the ratio only if both buckets have ≥ min_samples runs
+/// (warmup). Records an `exit_code_skew` event when skew_factor > 2.0.
+fn maybe_record_exit_skew(
+    db: &Db,
+    fingerprint: &str,
+    profile_id: i64,
+    fidelity_repo: &FidelityRepo,
+) -> anyhow::Result<()> {
+    let sessions = SessionRepo::new(db);
+    let (succ_runs, succ_raw, succ_cmp, fail_runs, fail_raw, fail_cmp) =
+        sessions.exit_bucket_aggregates(fingerprint)?;
+
+    let report = nid_fidelity::exit_code_skew(
+        succ_runs, succ_raw, succ_cmp, fail_runs, fail_raw, fail_cmp, 50,
+    );
+    if report.needs_restratified_resynthesis {
+        let _ = fidelity_repo.record(
+            None,
+            profile_id,
+            "exit_code_skew",
+            None,
+            Some(report.skew_factor as f64),
+            None,
+            Some(&format!(
+                "success_ratio={:.3} failure_ratio={:.3}",
+                report.success_ratio, report.failure_ratio
+            )),
+        );
+    }
+    Ok(())
+}
+
+/// Cheap per-invocation retention sweep (plan §12.3). We purge at most a
+/// handful of old sessions per call to stay within the 100ms budget.
+fn opportunistic_retention_purge(
+    db: &Db,
+    store: &BlobStore,
+    paths: &nid_storage::NidPaths,
+    retention_days: u32,
+) -> anyhow::Result<()> {
+    // Only run once per day.
+    let marker = paths.data_dir.join(".last_retention_day");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let today = now / 86400;
+    let last = std::fs::read_to_string(&marker)
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(0);
+    if last >= today {
+        return Ok(());
+    }
+    let _ = std::fs::write(&marker, today.to_string());
+
+    let cutoff = now as i64 - (retention_days as i64 * 86400);
+    let sessions = SessionRepo::new(db);
+    let released = sessions.purge_older_than(cutoff)?;
+    for (raw, cmp) in released.iter().take(256) {
+        if !raw.is_empty() {
+            let _ = store.release(raw);
+        }
+        if !cmp.is_empty() {
+            let _ = store.release(cmp);
+        }
+    }
+    Ok(())
+}
+
+/// Auto-synthesis on lock-in (plan §7.3).
 async fn try_auto_synthesize(
     fp: &str,
-    samples_repo: &nid_storage::sample_repo::SampleRepo<'_>,
+    samples_repo: &SampleRepo<'_>,
     store: &BlobStore<'_>,
     profile_repo: &ProfileRepo<'_>,
+    lock_in_n: usize,
+    fast_path_zv: bool,
 ) -> anyhow::Result<()> {
     let rows = samples_repo.for_fingerprint(fp)?;
     let mut samples: Vec<String> = Vec::with_capacity(rows.len());
@@ -357,12 +525,10 @@ async fn try_auto_synthesize(
         }
     }
 
-    let verdict = nid_synthesis::lockin::should_lock_in(&samples, 5, true);
+    let verdict = nid_synthesis::lockin::should_lock_in(&samples, lock_in_n, fast_path_zv);
     if !verdict.should_lock {
         return Ok(());
     }
-
-    // Re-check we didn't lose a race to the `nid synthesize` CLI path.
     if profile_repo.active_for(fp)?.is_some() {
         return Ok(());
     }
@@ -375,8 +541,6 @@ async fn try_auto_synthesize(
         .await?;
 
     nid_dsl::validator::validate_profile(&out.profile)?;
-
-    // Self-test against every captured sample.
     for s in &samples {
         let compressed = nid_dsl::interpreter::apply_rules(s, &out.profile.rules).to_string();
         let results =
@@ -410,8 +574,7 @@ async fn try_auto_synthesize(
     Ok(())
 }
 
-/// Layer 5 lookup: if a persisted `active` profile exists for this
-/// fingerprint, load its DSL blob and return (Profile, profile_id).
+/// Layer 5 lookup.
 fn resolve_profile_with_id(
     repo: &ProfileRepo,
     store: &BlobStore,

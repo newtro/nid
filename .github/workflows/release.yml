@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact: nid-x86_64-unknown-linux-musl.nidrel
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: nid-aarch64-unknown-linux-gnu.nidrel
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact: nid-x86_64-apple-darwin.nidrel
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: nid-aarch64-apple-darwin.nidrel
+    runs-on: ${{ matrix.os }}
+    env:
+      NID_TARGET_TRIPLE: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross tools (musl / aarch64)
+        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-gnu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+      - name: Build
+        run: cargo build --release --workspace --target ${{ matrix.target }}
+      - name: Package signed release tarball
+        env:
+          NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
+            VERSION="${{ github.event.inputs.tag }}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -z "$VERSION" ]; then VERSION="0.0.0-unknown"; fi
+          echo "version=$VERSION"
+          TARGET="${{ matrix.target }}"
+          BIN="target/${TARGET}/release/nid"
+          if [ ! -f "$BIN" ]; then BIN="target/${TARGET}/release/nid.exe"; fi
+          cargo run --release --bin nid-package --target "${TARGET}" -- \
+            --binary "$BIN" \
+            --version "$VERSION" \
+            --target "$TARGET" \
+            --output "${{ matrix.artifact }}" \
+            --signing-key-hex "$NID_RELEASE_SIGNING_KEY" \
+            || (
+              echo "nid-package binary not present; using bundled scripts/build_release.sh instead";
+              bash scripts/build_release.sh "$BIN" "$VERSION" "$TARGET" "${{ matrix.artifact }}"
+            )
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          files: dist/**/*.nidrel
+          draft: true
+          generate_release_notes: true

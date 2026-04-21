@@ -10,6 +10,14 @@ repository.workspace = true
 name = "nid"
 path = "src/main.rs"
 
+[[bin]]
+name = "nid-package"
+path = "src/bin/nid-package.rs"
+
+[[bin]]
+name = "nid-keygen"
+path = "src/bin/nid-keygen.rs"
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
@@ -30,9 +38,19 @@ nid-synthesis.workspace = true
 nid-profiles.workspace = true
 ed25519-dalek.workspace = true
 hex.workspace = true
+regex.workspace = true
+sha2.workspace = true
+tar.workspace = true
+reqwest.workspace = true
+thiserror.workspace = true
+rand.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 assert_cmd = "2"
 tar.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+rand.workspace = true
+ed25519-dalek.workspace = true

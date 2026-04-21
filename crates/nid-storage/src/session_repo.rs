@@ -178,6 +178,66 @@ impl<'a> SessionRepo<'a> {
         })
     }
 
+    /// Upsert the gain-rollup row for today's UTC calendar date (plan §12.1).
+    pub fn bump_gain_daily(
+        &self,
+        raw_bytes: i64,
+        compressed_bytes: i64,
+        tokens_saved: i64,
+    ) -> Result<(), DbError> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let (y, m, d) = civil_from_days(now / 86400);
+        let date = format!("{y:04}-{m:02}-{d:02}");
+        self.db.with_conn(|c| {
+            c.execute(
+                "INSERT INTO gain_daily(date, runs, raw_bytes, compressed_bytes, tokens_saved_est, usd_saved_est, synthesis_cost_usd)
+                 VALUES(?1, 1, ?2, ?3, ?4, 0, 0)
+                 ON CONFLICT(date) DO UPDATE SET
+                   runs = gain_daily.runs + 1,
+                   raw_bytes = gain_daily.raw_bytes + excluded.raw_bytes,
+                   compressed_bytes = gain_daily.compressed_bytes + excluded.compressed_bytes,
+                   tokens_saved_est = gain_daily.tokens_saved_est + excluded.tokens_saved_est",
+                params![date, raw_bytes, compressed_bytes, tokens_saved],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Per-fingerprint exit-code bucket aggregates for skew detection
+    /// (plan §8.3). Returns (success_runs, success_raw_bytes,
+    /// success_cmp_bytes, failure_runs, failure_raw_bytes, failure_cmp_bytes).
+    pub fn exit_bucket_aggregates(
+        &self,
+        fingerprint: &str,
+    ) -> Result<(u32, u64, u64, u32, u64, u64), DbError> {
+        self.db.with_conn(|c| {
+            c.query_row(
+                "SELECT
+                    COALESCE(SUM(CASE WHEN exit_code = 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN exit_code = 0 THEN raw_bytes ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN exit_code = 0 THEN compressed_bytes ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN exit_code != 0 THEN 1 ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN exit_code != 0 THEN raw_bytes ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN exit_code != 0 THEN compressed_bytes ELSE 0 END), 0)
+                 FROM sessions WHERE fingerprint = ?1 AND exit_code IS NOT NULL",
+                [fingerprint],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)? as u32,
+                        r.get::<_, i64>(1)?.max(0) as u64,
+                        r.get::<_, i64>(2)?.max(0) as u64,
+                        r.get::<_, i64>(3)? as u32,
+                        r.get::<_, i64>(4)?.max(0) as u64,
+                        r.get::<_, i64>(5)?.max(0) as u64,
+                    ))
+                },
+            )
+        })
+    }
+
     /// Delete sessions older than `cutoff_unix` and return their raw/compressed
     /// blob sha256s for the caller to release.
     pub fn purge_older_than(&self, cutoff_unix: i64) -> Result<Vec<(String, String)>, DbError> {
@@ -201,6 +261,22 @@ impl<'a> SessionRepo<'a> {
             Ok(to_release)
         })
     }
+}
+
+/// Convert epoch-days (days since 1970-01-01) to (year, month, day) per
+/// Howard Hinnant's civil_from_days algorithm.
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y as i32, m as u32, d as u32)
 }
 
 #[cfg(test)]

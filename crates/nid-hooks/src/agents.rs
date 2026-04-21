@@ -142,10 +142,19 @@ pub fn handle_payload(payload: &PreToolPayload, extra_passthrough: &[String]) ->
         extra_passthrough: extra_passthrough.to_vec(),
     };
     let dec = rewrite_command(&payload.command, &opts);
+    // Plan §8.5 — every rewrite response carries a minimal attestation so
+    // agents that consume `additionalContext` (Claude Code's structured
+    // metadata channel) can reason about what nid is about to do.
+    let attest = serde_json::json!({
+        "nid": {
+            "version": env!("CARGO_PKG_VERSION"),
+            "shadow": payload.shadow,
+        }
+    });
     match dec {
         RewriteDecision::Rewritten { updated, .. } => HookResponse {
             updated_input: Some(serde_json::json!({ "command": updated })),
-            additional_context: None,
+            additional_context: Some(attest),
             debug: Some("rewritten".into()),
         },
         RewriteDecision::Passthrough { reason, original } => HookResponse {
@@ -156,7 +165,7 @@ pub fn handle_payload(payload: &PreToolPayload, extra_passthrough: &[String]) ->
             } else {
                 None
             },
-            additional_context: None,
+            additional_context: Some(attest),
             debug: Some(format!("passthrough:{reason}")),
         },
     }

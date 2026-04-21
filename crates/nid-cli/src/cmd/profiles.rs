@@ -31,8 +31,13 @@ pub enum ProfilesCmd {
         key: Option<std::path::PathBuf>,
     },
     /// Import a signed `.nidprofile` tarball. Signer must be in the trust
-    /// keyring (see `nid trust add`).
-    Import { path: std::path::PathBuf },
+    /// keyring (see `nid trust add`). `--allow-unsigned` opts out after
+    /// an interactive confirmation (or NID_UNTRUSTED_OK=1).
+    Import {
+        path: std::path::PathBuf,
+        #[arg(long)]
+        allow_unsigned: bool,
+    },
     /// Re-sign an exported tarball with a different key.
     Sign {
         tarball: std::path::PathBuf,
@@ -54,12 +59,63 @@ pub async fn run(sub: ProfilesCmd) -> Result<()> {
             output,
             key,
         } => export(fingerprint, output, key).await,
-        ProfilesCmd::Import { path } => import(path).await,
+        ProfilesCmd::Import {
+            path,
+            allow_unsigned,
+        } => import(path, allow_unsigned).await,
+        ProfilesCmd::Rollback { fingerprint } => rollback(fingerprint).await,
+        ProfilesCmd::Purge { fingerprint } => purge(fingerprint).await,
+        ProfilesCmd::Revoke { fingerprint } => revoke(fingerprint).await,
         other => {
             println!("subcommand {other:?} not yet implemented");
             Ok(())
         }
     }
+}
+
+async fn rollback(fingerprint: String) -> Result<()> {
+    let paths = crate::cmd::paths::resolve()?;
+    let db = Db::open(&paths.db_path)?;
+    let repo = ProfileRepo::new(&db);
+    match repo.rollback(&fingerprint)? {
+        Some(id) => println!("rolled back `{fingerprint}` to profile id {id}"),
+        None => println!("no superseded profile to roll back for `{fingerprint}`"),
+    }
+    Ok(())
+}
+
+async fn purge(fingerprint: String) -> Result<()> {
+    let paths = crate::cmd::paths::resolve()?;
+    let db = Db::open(&paths.db_path)?;
+    let repo = ProfileRepo::new(&db);
+    let store = BlobStore::new(&db, &paths.blobs_dir);
+    let rows = repo.list()?;
+    let mut count = 0usize;
+    for r in rows.iter().filter(|r| r.fingerprint == fingerprint) {
+        if let Some(sha) = repo.purge(r.id)? {
+            let _ = store.release(&sha);
+        }
+        count += 1;
+    }
+    println!("purged {count} row(s) for `{fingerprint}`");
+    Ok(())
+}
+
+async fn revoke(fingerprint: String) -> Result<()> {
+    let paths = crate::cmd::paths::resolve()?;
+    let db = Db::open(&paths.db_path)?;
+    let repo = ProfileRepo::new(&db);
+    match repo.active_for(&fingerprint)? {
+        Some(row) => {
+            repo.set_status(row.id, nid_storage::profile_repo::STATUS_QUARANTINED)?;
+            println!(
+                "quarantined active profile for `{fingerprint}` (id {})",
+                row.id
+            );
+        }
+        None => println!("no active profile for `{fingerprint}`"),
+    }
+    Ok(())
 }
 
 async fn list() -> Result<()> {
@@ -151,7 +207,7 @@ async fn export(
     Ok(())
 }
 
-async fn import(path: std::path::PathBuf) -> Result<()> {
+async fn import(path: std::path::PathBuf, allow_unsigned: bool) -> Result<()> {
     let bytes = std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
     let paths = crate::cmd::paths::resolve()?;
     paths.ensure()?;
@@ -159,8 +215,18 @@ async fn import(path: std::path::PathBuf) -> Result<()> {
     let trust = TrustRepo::new(&db);
     let trusted_ids = trust.active_ids()?;
 
-    let unpacked = nidprofile::unpack_and_verify(&bytes, &trusted_ids)
-        .context("profile import failed signature/trust check")?;
+    let unpacked = match nidprofile::unpack_and_verify(&bytes, &trusted_ids) {
+        Ok(u) => u,
+        Err(nidprofile::NidProfileError::UntrustedSigner(key)) if allow_unsigned => {
+            if !confirm_allow_unsigned(&key)? {
+                anyhow::bail!("untrusted import refused");
+            }
+            // Build an allow-list of exactly this signer and retry.
+            nidprofile::unpack_and_verify(&bytes, &[key])
+                .context("profile signature invalid even with --allow-unsigned")?
+        }
+        Err(e) => return Err(anyhow::anyhow!("profile import failed: {e}")),
+    };
 
     let store = BlobStore::new(&db, &paths.blobs_dir);
     let dsl_sha = store.put(unpacked.profile.to_toml()?.as_bytes(), BlobKind::Dsl)?;
@@ -186,3 +252,21 @@ async fn import(path: std::path::PathBuf) -> Result<()> {
     );
     Ok(())
 }
+
+fn confirm_allow_unsigned(signer_key_id: &str) -> Result<bool> {
+    if std::env::var("NID_UNTRUSTED_OK").ok().as_deref() == Some("1") {
+        return Ok(true);
+    }
+    use std::io::Write;
+    eprint!(
+        "WARNING: profile is signed by key `{signer_key_id}` which is NOT in your trust keyring.\n\
+         Importing an untrusted profile can execute arbitrary regex/DSL rules on your command\n\
+         output. Type 'yes' to continue: "
+    );
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim() == "yes")
+}
+
+use std::io::BufRead as _;

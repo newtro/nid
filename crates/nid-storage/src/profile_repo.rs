@@ -178,6 +178,56 @@ impl<'a> ProfileRepo<'a> {
         })
     }
 
+    /// Roll back: flip the most-recent superseded profile for `fingerprint`
+    /// back to `active`, demoting the current active to superseded in the
+    /// same transaction.
+    pub fn rollback(&self, fingerprint: &str) -> Result<Option<i64>, DbError> {
+        self.db.with_conn(|c| {
+            let tx = c.transaction()?;
+            let target: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM profiles
+                     WHERE fingerprint = ?1 AND status = 'superseded'
+                     ORDER BY created_at DESC
+                     LIMIT 1",
+                    [fingerprint],
+                    |r| r.get::<_, i64>(0),
+                )
+                .ok();
+            let Some(target) = target else {
+                return Ok(None);
+            };
+            tx.execute(
+                "UPDATE profiles SET status='superseded'
+                 WHERE fingerprint=?1 AND status='active' AND id != ?2",
+                params![fingerprint, target],
+            )?;
+            tx.execute(
+                "UPDATE profiles SET status='active' WHERE id = ?1",
+                [target],
+            )?;
+            tx.commit()?;
+            Ok(Some(target))
+        })
+    }
+
+    /// Purge: hard-delete a profile row and return the dsl blob sha so the
+    /// caller can release it. This is destructive; callers should prefer
+    /// `set_status("quarantined")` for reversible disable.
+    pub fn purge(&self, id: i64) -> Result<Option<String>, DbError> {
+        self.db.with_conn(|c| {
+            let sha: Option<String> = c
+                .query_row(
+                    "SELECT dsl_blob_sha256 FROM profiles WHERE id = ?1",
+                    [id],
+                    |r| r.get(0),
+                )
+                .ok();
+            c.execute("DELETE FROM profiles WHERE id = ?1", [id])?;
+            Ok(sha)
+        })
+    }
+
     pub fn record_use(&self, id: i64) -> Result<(), DbError> {
         let now = unix_now();
         self.db.with_conn(|c| {

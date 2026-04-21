@@ -2,7 +2,9 @@
 //!
 //! See plan §12 and Appendix A.
 
+pub mod agent_registry_repo;
 pub mod blob;
+pub mod config;
 pub mod db;
 pub mod fidelity_repo;
 pub mod migrations;

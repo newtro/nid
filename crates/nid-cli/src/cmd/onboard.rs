@@ -112,6 +112,27 @@ pub async fn run(args: OnboardArgs) -> Result<()> {
         .and_then(|p| p.to_str().map(str::to_string))
         .unwrap_or_else(|| "nid".into());
     let _ = installer::apply(&plan, &binary)?;
+
+    // Record hook SHA-256 and backup for each applied agent (plan §11.1).
+    let db = nid_storage::Db::open(&paths.db_path)?;
+    let registry = nid_storage::agent_registry_repo::AgentRegistryRepo::new(&db);
+    for change in &plan.changes {
+        if change.config_path.exists() {
+            if let Ok(body) = std::fs::read(&change.config_path) {
+                use sha2::{Digest, Sha256};
+                let mut h = Sha256::new();
+                h.update(&body);
+                let sha = hex::encode(h.finalize());
+                let _ = registry.upsert(
+                    change.agent.as_str(),
+                    change.config_path.to_str().unwrap_or(""),
+                    &sha,
+                    Some(paths.onboard_backup.to_str().unwrap_or("")),
+                );
+            }
+        }
+    }
+
     println!("applied. backup at {}", paths.onboard_backup.display());
     Ok(())
 }
