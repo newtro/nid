@@ -21,8 +21,12 @@ use nid_core::{
     Compressor, Context,
 };
 use nid_dsl::ast::Profile;
+use nid_fidelity::structural_subset_check;
 use nid_storage::{
     blob::{BlobKind, BlobStore},
+    fidelity_repo::FidelityRepo,
+    profile_repo::ProfileRepo,
+    sample_repo::SampleRepo,
     session_repo::{NewSession, SessionRepo},
     Db,
 };
@@ -48,12 +52,24 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     let interrupted = Arc::new(AtomicBool::new(false));
     install_sigterm_trap(interrupted.clone());
 
-    // Resolve a bundled profile by fingerprint.
-    let bundled = nid_profiles::load_all();
-    let profile: Option<Profile> = bundled
-        .into_iter()
-        .find(|(_, p)| p.meta.fingerprint == fp)
-        .map(|(_, p)| p);
+    // Resolve a profile by fingerprint — Layer 5 (learned, persisted) has
+    // priority over Layer 3 (bundled).
+    let db = Db::open(&paths.db_path)?;
+    let store = BlobStore::new(&db, &paths.blobs_dir);
+    let profile_repo = ProfileRepo::new(&db);
+    let sample_repo = SampleRepo::new(&db);
+
+    let (profile, profile_id): (Option<Profile>, Option<i64>) = match resolve_profile_with_id(&profile_repo, &store, &fp)? {
+        Some((p, id)) => (Some(p), Some(id)),
+        None => {
+            let bundled = nid_profiles::load_all();
+            let p = bundled
+                .into_iter()
+                .find(|(_, p)| p.meta.fingerprint == fp)
+                .map(|(_, p)| p);
+            (p, None)
+        }
+    };
 
     // Spawn + capture.
     let cmd_str = argv.join(" ");
@@ -87,10 +103,41 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     };
 
     // Persist.
-    let db = Db::open(&paths.db_path)?;
-    let store = BlobStore::new(&db, &paths.blobs_dir);
     let raw_sha = store.put(raw_redacted.as_bytes(), BlobKind::Raw)?;
     let cmp_sha = store.put(compressed.as_bytes(), BlobKind::Compressed)?;
+
+    // Phase 4: sample capture for unknown fingerprints. Cap at 64 samples per
+    // fingerprint to avoid runaway growth; lock-in decides when to synthesize.
+    if profile.is_none() {
+        let count = sample_repo.count_for(&fp).unwrap_or(0);
+        if count < 64 {
+            let sample_sha = store.put(raw_redacted.as_bytes(), BlobKind::Sample)?;
+            let _ = sample_repo.insert(&fp, &sample_sha, exit_code, None);
+        }
+    }
+
+    // Phase 5 — Tier 1 invariants + Tier 2 structural subset.
+    let mut self_fidelity = 1.0f32;
+    let mut failed_invariants: Vec<String> = Vec::new();
+    let fidelity_repo = FidelityRepo::new(&db);
+    if let (Some(p), Some(pid)) = (&profile, profile_id) {
+        if let Ok(results) = nid_dsl::invariants::check_invariants(&p.invariants, &raw_redacted, &compressed) {
+            let total = results.len().max(1) as f32;
+            let passed = results.iter().filter(|r| r.passed).count() as f32;
+            self_fidelity = passed / total;
+            for r in &results {
+                let kind = if r.passed { "invariant_pass" } else { "invariant_fail" };
+                let _ = fidelity_repo.record(Some(id.as_str()), pid, kind, Some(&r.name), None, None, r.detail.as_deref());
+                if !r.passed {
+                    failed_invariants.push(r.name.clone());
+                }
+            }
+        }
+        let s = structural_subset_check(&raw_redacted, &compressed);
+        let kind = if s.passed { "structural_pass" } else { "structural_fail" };
+        let detail = if s.passed { None } else { Some(format!("{} invented line(s)", s.invented_lines.len())) };
+        let _ = fidelity_repo.record(Some(id.as_str()), pid, kind, None, None, None, detail.as_deref());
+    }
 
     let repo = SessionRepo::new(&db);
     let cwd_owned = std::env::current_dir()
@@ -143,12 +190,16 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             println!("--- [nid: interrupted] ---");
         }
         println!(
-            "[nid: profile {}/v{}, mode={}, raw via nid show {}]",
+            "[nid: profile {}/v{}, fidelity {:.2}, mode={}, raw via nid show {}]",
             profile.as_ref().map(|p| p.meta.fingerprint.as_str()).unwrap_or("<none>"),
             profile.as_ref().map(|p| p.meta.version.as_str()).unwrap_or("-"),
+            self_fidelity,
             mode,
             id
         );
+        if !failed_invariants.is_empty() {
+            println!("[nid: invariants failed: {}]", failed_invariants.join(", "));
+        }
     }
 
     std::process::exit(exit_code);
@@ -217,4 +268,22 @@ fn unix_now() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Layer 5 lookup: if a persisted `active` profile exists for this
+/// fingerprint, load its DSL blob and return (Profile, profile_id).
+fn resolve_profile_with_id(
+    repo: &ProfileRepo,
+    store: &BlobStore,
+    fp: &str,
+) -> anyhow::Result<Option<(Profile, i64)>> {
+    let Some(row) = repo.active_for(fp)? else {
+        return Ok(None);
+    };
+    let bytes = store.get(&row.dsl_blob_sha256)?;
+    let toml_src = std::str::from_utf8(&bytes)
+        .map_err(|e| anyhow::anyhow!("profile blob not UTF-8: {e}"))?;
+    let p = Profile::from_toml(toml_src).map_err(|e| anyhow::anyhow!("profile parse: {e}"))?;
+    let _ = repo.record_use(row.id);
+    Ok(Some((p, row.id)))
 }
