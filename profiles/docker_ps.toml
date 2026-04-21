@@ -1,0 +1,18 @@
+# docker ps — keep the header row and container rows; drop nothing (tabular).
+[meta]
+fingerprint = "docker ps"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "tabular"
+description = "docker ps output is already compact; just strip ANSI and dedup."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"
+
+[[invariants]]
+name = "HeaderPreserved"
+check = "first_line_matches"
+pattern = "^CONTAINER ID"

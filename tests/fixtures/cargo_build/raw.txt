@@ -1,0 +1,14 @@
+   Compiling proc-macro2 v1.0.80
+   Compiling unicode-ident v1.0.18
+   Compiling serde v1.0.200
+warning: unused variable: `x`
+  --> src/foo.rs:3:9
+   |
+3  |     let x = 5;
+   |         ^
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: 1 warning emitted
+
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s

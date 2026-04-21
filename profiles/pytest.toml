@@ -1,0 +1,20 @@
+# pytest — keep test session header, FAILED/PASSED markers, the summary.
+[meta]
+fingerprint = "pytest"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve session header, per-test FAIL/PASS lines, and the final summary."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(=+|platform |collected |rootdir:|PASSED |FAILED |ERROR |SKIPPED |XFAIL |XPASS |test session starts|short test summary|\S+\.py::\S+|E |_+ )'
+
+[[invariants]]
+name = "SummaryLinePreserved"
+check = "count_matches_at_least"
+pattern = '^=+ [0-9]+ '
+count = 1

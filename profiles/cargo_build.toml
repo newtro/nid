@@ -1,0 +1,32 @@
+# cargo build — keep errors/warnings/finished, drop "Compiling X" lines.
+[meta]
+fingerprint = "cargo build"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve errors, warnings, and the Finished summary; drop progress noise."
+
+[[rules]]
+kind = "strip_ansi"
+
+# Keep error, warning, note, help lines; file-location markers (`  -->`);
+# inline code-frame pipes (`  |`); note/help bullets (`  =`); and the
+# final "Finished …" / "error: could not compile …" summaries.
+[[rules]]
+kind = "keep_lines"
+match = '^(error|warning|note|help|\s+Compiling|\s*-->|(\s*|\d+\s*)\||\s*=|\s+Finished |error\[)'
+
+# Drop "   Compiling …" lines — they're noise unless the build failed.
+[[rules]]
+kind = "drop_lines"
+match = '^\s+Compiling\b'
+
+[[invariants]]
+name = "ErrorLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^error"
+
+[[invariants]]
+name = "WarningLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^warning"

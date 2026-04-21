@@ -1,0 +1,8 @@
+=== RUN   TestBasic
+--- PASS: TestBasic (0.00s)
+=== RUN   TestEdge
+--- PASS: TestEdge (0.01s)
+=== RUN   TestFails
+--- FAIL: TestFails (0.00s)
+FAIL
+FAIL	example.com/pkg/foo	0.023s

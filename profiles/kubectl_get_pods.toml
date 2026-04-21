@@ -1,0 +1,18 @@
+# kubectl get pods — tabular, small. Strip ANSI and dedup.
+[meta]
+fingerprint = "kubectl get pods"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "tabular"
+description = "kubectl get pods is already compact; just sanitize."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"
+
+[[invariants]]
+name = "HeaderPreserved"
+check = "first_line_matches"
+pattern = "^NAME"

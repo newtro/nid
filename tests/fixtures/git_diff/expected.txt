@@ -1,0 +1,7 @@
+diff --git a/src/foo.rs b/src/foo.rs
+index abcdef1..1234567 100644
+--- a/src/foo.rs
++++ b/src/foo.rs
+@@ -10,7 +10,7 @@ fn main() {
+-    println!("old");
++    println!("new");

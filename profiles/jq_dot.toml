@@ -1,0 +1,18 @@
+# jq '.' — pretty-prints a JSON doc. Keep structure as-is.
+[meta]
+fingerprint = "jq ."
+version = "1.0.0"
+schema = "1.0"
+format_claim = "json"
+description = "jq identity output is already JSON; dedup + strip ANSI."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "dedup"
+
+[[invariants]]
+name = "JsonWellFormed"
+check = "json_path_exists"
+path = "$"

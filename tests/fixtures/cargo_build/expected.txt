@@ -1,0 +1,9 @@
+warning: unused variable: `x`
+  --> src/foo.rs:3:9
+   |
+3  |     let x = 5;
+   |         ^
+   |
+   = note: `#[warn(unused_variables)]` on by default
+warning: 1 warning emitted
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.23s

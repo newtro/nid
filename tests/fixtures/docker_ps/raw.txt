@@ -1,0 +1,4 @@
+CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS         PORTS                    NAMES
+abc123def456   postgres:16    "docker-entrypoint.s…"   5 minutes ago   Up 5 minutes   0.0.0.0:5432->5432/tcp   pg-main
+789ghi012jkl   redis:7        "docker-entrypoint.s…"   5 minutes ago   Up 5 minutes   0.0.0.0:6379->6379/tcp   redis-cache
+345mno678pqr   nginx:alpine   "/docker-entrypoint.…"   5 minutes ago   Up 5 minutes   0.0.0.0:80->80/tcp       web

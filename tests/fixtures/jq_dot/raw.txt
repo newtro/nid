@@ -1,0 +1,8 @@
+{
+  "id": 42,
+  "name": "example",
+  "tags": [
+    "alpha",
+    "beta"
+  ]
+}

@@ -1,0 +1,14 @@
+commit abcdef1234567890abcdef1234567890abcdef12
+Author: Alice Example <alice@example.com>
+Date:   Mon Apr 21 10:00:00 2026 -0400
+
+    Add new widget
+
+    More details in the body.
+
+commit 0123456789abcdef0123456789abcdef01234567
+Merge: aaa111 bbb222
+Author: Bob Merger <bob@example.com>
+Date:   Sun Apr 20 09:00:00 2026 -0400
+
+    Merge branch 'feature/foo'

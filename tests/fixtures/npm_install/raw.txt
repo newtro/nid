@@ -1,0 +1,10 @@
+npm warn deprecated request@2.88.2: request has been deprecated
+npm warn deprecated har-validator@5.1.5: this library is no longer supported
+npm notice created a lockfile as package-lock.json
+added 243 packages, and audited 244 packages in 5s
+
+17 packages are looking for funding
+  run `npm fund` for details
+
+found 3 vulnerabilities (1 moderate, 2 high)
+  run `npm audit fix` to fix them, or `npm audit` for details

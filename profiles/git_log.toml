@@ -1,0 +1,23 @@
+# git log (default, verbose format)
+[meta]
+fingerprint = "git log"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Keep commit headers, subjects, and blank separators; drop verbose diff bodies."
+
+[[rules]]
+kind = "strip_ansi"
+
+# Keep commit hashes, author, date, and message lines.
+[[rules]]
+kind = "keep_lines"
+match = '^(commit [0-9a-fA-F]{7,40}|Author:|Date:|Merge:|    )'
+
+[[rules]]
+kind = "dedup"
+
+[[invariants]]
+name = "CommitLinesPreserved"
+check = "all_matching_preserved"
+pattern = "^commit [0-9a-fA-F]{7,40}"

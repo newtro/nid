@@ -1,0 +1,24 @@
+# git diff — keep file headers, hunk headers, added/removed lines only.
+[meta]
+fingerprint = "git diff"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "diff"
+description = "Preserve file boundaries and changes; drop context unless needed."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(diff --git |index [0-9a-fA-F]+|--- |\+\+\+ |@@ |\+|-|Binary files)'
+
+[[invariants]]
+name = "HunkHeaderPreserved"
+check = "all_matching_preserved"
+pattern = "^@@ "
+
+[[invariants]]
+name = "FileHeaderPreserved"
+check = "all_matching_preserved"
+pattern = "^diff --git "

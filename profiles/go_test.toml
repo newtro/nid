@@ -1,0 +1,20 @@
+# go test — keep PASS/FAIL/ok/FAIL summary lines; drop package build lines.
+[meta]
+fingerprint = "go test"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Preserve PASS/FAIL/ok markers; drop verbose progress."
+
+[[rules]]
+kind = "strip_ansi"
+
+[[rules]]
+kind = "keep_lines"
+match = '^(=== (RUN|PAUSE|CONT)|--- (PASS|FAIL|SKIP)|PASS|FAIL|ok\s|FAIL\s)'
+
+[[invariants]]
+name = "ResultLinePreserved"
+check = "count_matches_at_least"
+pattern = '^(PASS|FAIL|ok\s|FAIL\s)'
+count = 1
