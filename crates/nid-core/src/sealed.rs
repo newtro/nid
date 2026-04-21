@@ -30,18 +30,73 @@ pub enum SealError {
     Crypto(String),
     #[error("bad sealed blob: {0}")]
     Format(&'static str),
+    #[error(
+        "sealed key at {path} is missing or corrupt, but sealed raw blobs exist in the store. \
+         Regenerating the key would orphan prior raw output permanently. Recovery options: \
+         (a) restore the key file from backup, (b) run `nid gc --retention-days 0` to purge \
+         the now-unreadable raw blobs, or (c) delete {path} AND clear sealed-raw blobs manually."
+    )]
+    KeyMissingButBlobsExist { path: String },
+    #[error("sealed key at {path} is the wrong size ({got} bytes, expected {expected})")]
+    KeyWrongSize {
+        path: String,
+        got: usize,
+        expected: usize,
+    },
 }
 
-/// Load the machine-local 32-byte key from disk, creating one if missing.
-/// Tightens perms to 0600 on unix.
+/// Load the machine-local 32-byte key from disk, creating one if missing AND
+/// no sealed blobs exist yet (fresh install path).
+///
+/// **Safety note**: if the key is missing but the blob store already contains
+/// sealed raw blobs, we REFUSE to regenerate — blindly making a new key
+/// would orphan every prior raw output silently. The caller must either
+/// restore the key from backup or run `nid gc` to purge the orphans.
+///
+/// `blobs_root` is the directory where sealed blobs live (for the
+/// "do prior sealed blobs exist?" check). Pass None for paths that
+/// don't need the safety check (e.g. the `nid-package` helper).
 pub fn load_or_create_key(path: &Path) -> Result<[u8; KEY_LEN], SealError> {
-    if let Ok(bytes) = std::fs::read(path) {
-        if bytes.len() == KEY_LEN {
+    load_or_create_key_safe(path, None)
+}
+
+/// Same as `load_or_create_key`, but with the sealed-blobs-exist safety
+/// check. Pass `Some(blobs_root)` to enable the check.
+pub fn load_or_create_key_safe(
+    path: &Path,
+    blobs_root: Option<&Path>,
+) -> Result<[u8; KEY_LEN], SealError> {
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.len() == KEY_LEN => {
             let mut key = [0u8; KEY_LEN];
             key.copy_from_slice(&bytes);
             return Ok(key);
         }
+        Ok(bytes) => {
+            return Err(SealError::KeyWrongSize {
+                path: path.display().to_string(),
+                got: bytes.len(),
+                expected: KEY_LEN,
+            });
+        }
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(SealError::Io(e));
+        }
+        Err(_) => {
+            // NotFound — continue to the regenerate path below, but first
+            // check whether any sealed blobs already exist.
+        }
     }
+
+    // Key is missing. Refuse to regenerate if prior sealed blobs are present.
+    if let Some(blobs_dir) = blobs_root {
+        if blobs_dir_contains_sealed_blob(blobs_dir) {
+            return Err(SealError::KeyMissingButBlobsExist {
+                path: path.display().to_string(),
+            });
+        }
+    }
+
     let mut key = [0u8; KEY_LEN];
     rand::thread_rng().fill_bytes(&mut key);
     if let Some(parent) = path.parent() {
@@ -57,6 +112,34 @@ pub fn load_or_create_key(path: &Path) -> Result<[u8; KEY_LEN], SealError> {
     }
     std::fs::rename(&tmp, path)?;
     Ok(key)
+}
+
+/// Cheap probe: does `blobs_root` contain at least one file that looks like
+/// a sealed blob (first byte == VERSION_V1)? Used by `load_or_create_key_safe`
+/// to refuse silent key regeneration when orphaning would result.
+fn blobs_dir_contains_sealed_blob(blobs_root: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(blobs_root) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        // Read only the first byte to keep this cheap; sealed blobs are
+        // zstd-compressed so the first byte won't be literally 0x01 unless we
+        // decompress. Shortcut: a real orphan-check would decompress but for
+        // a cheap probe we just require that *any* raw blob exists.
+        // Since all raw blobs in the store are sealed (post-upgrade) or
+        // legacy plaintext — either way the existence of raw/sample/... blobs
+        // means the key loss is destructive. Probe by filename pattern.
+        if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+            if name.starts_with("sha256-") && name.ends_with(".zst") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Encrypt `plaintext` with the local key. Returns a versioned, self-describing
@@ -151,5 +234,46 @@ mod tests {
         let last = sealed.len() - 1;
         sealed[last] ^= 1;
         assert!(open(&sealed, &key).is_err());
+    }
+
+    #[test]
+    fn load_or_create_key_safe_refuses_when_blobs_exist() {
+        // Simulate key-loss-with-blobs-present: create a blobs dir with one
+        // sha256-*.zst file, then call load_or_create_key_safe on a
+        // nonexistent key. It MUST refuse rather than silently regenerate.
+        let t = TempDir::new().unwrap();
+        let key_path = t.path().join("key");
+        let blobs_dir = t.path().join("blobs");
+        std::fs::create_dir_all(&blobs_dir).unwrap();
+        std::fs::write(blobs_dir.join("sha256-deadbeef.zst"), b"fake").unwrap();
+
+        let res = load_or_create_key_safe(&key_path, Some(&blobs_dir));
+        assert!(
+            matches!(res, Err(SealError::KeyMissingButBlobsExist { .. })),
+            "expected KeyMissingButBlobsExist, got {res:?}"
+        );
+        // Key file must NOT have been created.
+        assert!(!key_path.exists());
+    }
+
+    #[test]
+    fn load_or_create_key_safe_regenerates_on_empty_blob_store() {
+        // Opposite case: empty blobs dir is a fresh install → regenerate.
+        let t = TempDir::new().unwrap();
+        let key_path = t.path().join("key");
+        let blobs_dir = t.path().join("blobs");
+        std::fs::create_dir_all(&blobs_dir).unwrap();
+        let key = load_or_create_key_safe(&key_path, Some(&blobs_dir)).unwrap();
+        assert_eq!(key.len(), 32);
+        assert!(key_path.exists());
+    }
+
+    #[test]
+    fn load_or_create_key_returns_wrong_size_error() {
+        let t = TempDir::new().unwrap();
+        let key_path = t.path().join("key");
+        std::fs::write(&key_path, b"too short").unwrap();
+        let res = load_or_create_key(&key_path);
+        assert!(matches!(res, Err(SealError::KeyWrongSize { .. })));
     }
 }

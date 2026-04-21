@@ -40,7 +40,11 @@ pub async fn run(args: ShowArgs) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("session has no raw blob"))?;
     let bytes = store.get(&sha)?;
 
-    let plaintext = match try_unseal(&bytes, &paths.local_key) {
+    // Distinguish three cases:
+    //  - looks-sealed + decrypts OK → emit plaintext
+    //  - looks-sealed + decrypt fails → BAIL LOUDLY (key rotated/corrupt)
+    //  - not-sealed (legacy plaintext blob) → treat as plaintext
+    let plaintext = match try_unseal(&bytes, &paths.local_key, &paths.blobs_dir)? {
         Some(s) => s,
         None => String::from_utf8_lossy(&bytes).into_owned(),
     };
@@ -57,18 +61,42 @@ pub async fn run(args: ShowArgs) -> Result<()> {
     Ok(())
 }
 
-fn try_unseal(bytes: &[u8], key_path: &std::path::Path) -> Option<String> {
+/// Returns Ok(Some(plaintext)) when the blob was sealed and decrypts. Returns
+/// Ok(None) when the blob isn't sealed (legacy plaintext raw). Returns Err
+/// when the blob IS sealed but decryption fails — which means the key was
+/// rotated or the blob is corrupt. We surface that as a hard error rather
+/// than silently handing back garbage.
+fn try_unseal(
+    bytes: &[u8],
+    key_path: &std::path::Path,
+    blobs_dir: &std::path::Path,
+) -> Result<Option<String>> {
     if bytes.is_empty() || bytes[0] != 1 {
-        return None;
+        return Ok(None);
     }
-    let key = sealed::load_or_create_key(key_path).ok()?;
-    let plaintext = sealed::open(bytes, &key).ok()?;
-    Some(String::from_utf8_lossy(&plaintext).into_owned())
+    let key = sealed::load_or_create_key_safe(key_path, Some(blobs_dir))
+        .map_err(|e| anyhow::anyhow!("cannot load sealed key: {e}"))?;
+    let plaintext = sealed::open(bytes, &key).map_err(|e| {
+        anyhow::anyhow!(
+            "sealed raw blob failed to decrypt ({e}). The sealed key at {} may have \
+             been rotated, restored from a different backup, or corrupted. Prior raw \
+             blobs are only readable with the original key.",
+            key_path.display()
+        )
+    })?;
+    Ok(Some(String::from_utf8_lossy(&plaintext).into_owned()))
 }
 
 fn confirm_unredacted_access(session_id: &str) -> Result<bool> {
     if std::env::var("NID_UNREDACTED_OK").ok().as_deref() == Some("1") {
         return Ok(true);
+    }
+    // Defence-in-depth: if stdin isn't a tty, refuse unless the caller set
+    // the explicit env override. Otherwise a piped `yes\n` would defeat the
+    // confirmation.
+    use std::io::IsTerminal as _;
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!("--raw-unredacted requires an interactive terminal or NID_UNREDACTED_OK=1");
     }
     eprint!(
         "WARNING: --raw-unredacted will emit unredacted raw output for session {session_id}.\n\

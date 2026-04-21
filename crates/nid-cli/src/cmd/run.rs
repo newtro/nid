@@ -198,8 +198,11 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     // Samples are persisted REDACTED because they feed the synthesis
     // prompt path, which we don't want to leak secrets into.
     let raw_sha = if preserve_raw {
-        let key = nid_core::sealed::load_or_create_key(&paths.local_key)
-            .map_err(|e| anyhow::anyhow!("sealed-key init: {e}"))?;
+        // `load_or_create_key_safe` refuses to regenerate when sealed blobs
+        // already exist — prevents silent orphaning after a key loss.
+        let key =
+            nid_core::sealed::load_or_create_key_safe(&paths.local_key, Some(&paths.blobs_dir))
+                .map_err(|e| anyhow::anyhow!("sealed-key init: {e}"))?;
         let sealed_bytes = nid_core::sealed::seal(raw_out.as_bytes(), &key)
             .map_err(|e| anyhow::anyhow!("seal: {e}"))?;
         Some(store.put(&sealed_bytes, BlobKind::Raw)?)

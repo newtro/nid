@@ -102,10 +102,12 @@ jobs:
         shell: pwsh
         env:
           NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           $Version = $env:GITHUB_REF_NAME -replace '^v',''
           if (-not $Version -or $Version -eq $env:GITHUB_REF_NAME) {
-            $Version = ($env:INPUT_TAG ?? "0.0.0-unknown") -replace '^v',''
+            $InputTag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { "0.0.0-unknown" }
+            $Version  = $InputTag -replace '^v',''
           }
           $Bin     = "target/${{ matrix.target }}/release/nid.exe"
           $Packer  = "target/release/nid-package.exe"
