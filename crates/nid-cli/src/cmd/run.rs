@@ -34,7 +34,6 @@ use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 
 pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
@@ -82,23 +81,43 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     // Detect per-invocation bypass signals before we spawn.
     let bypass_signals = detect_bypass_signals(&argv, &fp, &paths);
 
-    // Spawn + capture.
+    // Spawn + capture — bounded by `session.max_total_mb` (plan §11.3).
     let cmd_str = argv.join(" ");
-    let (exit_code, raw_out) = spawn_and_capture(&argv, interrupted.clone()).await?;
+    // Per-invocation cap: if max_total_mb is N, a single capture of > N bytes
+    // is nonsensical — cap at N MiB. Disable by setting max_total_mb = 0.
+    let capture_cap_bytes = if cfg.session.max_total_mb == 0 {
+        None
+    } else {
+        Some((cfg.session.max_total_mb as usize).saturating_mul(1024 * 1024))
+    };
+    let (exit_code, raw_out, _capture_truncated) =
+        spawn_and_capture(&argv, interrupted.clone(), capture_cap_bytes).await?;
 
-    // Redact before persistence. Config `allow_commands` opts a command out;
-    // `extra_patterns` adds to the built-ins.
+    // Redaction (plan §11.3):
+    // - `allow_commands` opts a command out of redaction entirely.
+    // - `deny_commands` forces aggressive-redact (extra high-entropy sweep +
+    //   always applies even if `allow_commands` was a bad-faith entry).
+    // - `extra_patterns` adds to the built-ins.
     let bin = argv
         .first()
         .and_then(|p| std::path::Path::new(p).file_stem())
         .and_then(|s| s.to_str())
         .unwrap_or("");
-    let redaction_on = !cfg
+    let allow_for_bin = cfg
         .security
         .redaction
         .allow_commands
         .iter()
         .any(|c| c == bin);
+    let deny_for_bin = cfg
+        .security
+        .redaction
+        .deny_commands
+        .iter()
+        .any(|c| c == bin);
+    // `deny_commands` wins over `allow_commands` — you can't opt a dangerous
+    // command out of redaction by mistake.
+    let redaction_on = !allow_for_bin || deny_for_bin;
     let raw_redacted = if redaction_on {
         let mut out = redact::redact(&raw_out);
         for pat in &cfg.security.redaction.extra_patterns {
@@ -106,13 +125,26 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
                 out = re.replace_all(&out, "[REDACTED:user]").into_owned();
             }
         }
+        if deny_for_bin {
+            // Aggressive additional sweep: redact any token ≥ 24 chars from
+            // base64url alphabet, regardless of Shannon entropy. This is
+            // overzealous on purpose — `deny_commands` is opt-in.
+            let re = regex::Regex::new(r"\b[A-Za-z0-9_+/=-]{24,}\b").unwrap();
+            out = re
+                .replace_all(&out, |_: &regex::Captures| "[REDACTED:deny]".to_string())
+                .into_owned();
+        }
         out
     } else {
         raw_out.clone()
     };
 
-    let preserve_raw =
-        cfg.session.preserve_raw && !cfg.session.deny_raw_commands.iter().any(|c| c == bin);
+    // `deny_raw_commands` — don't persist raw for this command.
+    // `allow_raw_commands` — force persist even if deny list or global
+    // `preserve_raw=false` would have blocked it (plan §11.3).
+    let deny_raw = cfg.session.deny_raw_commands.iter().any(|c| c == bin);
+    let force_raw = cfg.session.allow_raw_commands.iter().any(|c| c == bin);
+    let preserve_raw = force_raw || (cfg.session.preserve_raw && !deny_raw);
 
     // Layer 1 — always.
     let layer1 = Layer1Generic::default();
@@ -125,8 +157,27 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
     let after_layer1 = String::from_utf8_lossy(&l1_output).to_string();
 
     // Tier B: profile (Layer 3/5), else Layer 2 format-aware cleanup.
+    // DSL is budgeted (plan §11.4) — a pathological profile aborts into
+    // Layer-1-only output instead of hanging the wrapped command (C4 fix).
+    let mut budget_aborted = false;
     let compressed = match &profile {
-        Some(p) => nid_dsl::interpreter::apply_rules(&after_layer1, &p.rules).to_string(),
+        Some(p) => {
+            let out = nid_dsl::interpreter::apply_rules_with_budget(
+                &after_layer1,
+                &p.rules,
+                nid_dsl::Budget::default(),
+            );
+            if out.budget_aborted {
+                budget_aborted = true;
+                tracing::warn!(
+                    fp = %fp,
+                    "DSL budget aborted mid-run; degrading to Layer-1 output"
+                );
+                after_layer1.clone()
+            } else {
+                out.to_string()
+            }
+        }
         None => {
             let format = detect_format(after_layer1.as_bytes());
             let l2 = nid_core::layers::Layer2Format { format };
@@ -139,9 +190,19 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
         }
     };
 
-    // Persist.
+    // Persist. Plan §11.1 — raw is stored UNREDACTED, sealed with AES-GCM
+    // using a machine-local key. `nid show` decrypts + re-redacts on read
+    // by default; only `--raw-unredacted` (with confirmation) emits
+    // plaintext. This makes the flag semantically meaningful (H-R4 fix).
+    //
+    // Samples are persisted REDACTED because they feed the synthesis
+    // prompt path, which we don't want to leak secrets into.
     let raw_sha = if preserve_raw {
-        Some(store.put(raw_redacted.as_bytes(), BlobKind::Raw)?)
+        let key = nid_core::sealed::load_or_create_key(&paths.local_key)
+            .map_err(|e| anyhow::anyhow!("sealed-key init: {e}"))?;
+        let sealed_bytes = nid_core::sealed::seal(raw_out.as_bytes(), &key)
+            .map_err(|e| anyhow::anyhow!("seal: {e}"))?;
+        Some(store.put(&sealed_bytes, BlobKind::Raw)?)
     } else {
         None
     };
@@ -165,6 +226,7 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
             &profile_repo,
             cfg.synthesis.samples_to_lock,
             cfg.synthesis.fast_path_if_zero_variance,
+            &paths,
         )
         .await;
     }
@@ -233,6 +295,52 @@ pub async fn run(argv: Vec<String>, shadow: bool) -> Result<()> {
                 Some(weight as f64),
                 None,
             );
+        }
+
+        // Plan §11.4 — if the DSL budget aborted this run, the profile is
+        // pathological. Quarantine it so it stops being dispatched, and
+        // record a fidelity_event for audit.
+        if budget_aborted {
+            let _ = profile_repo.set_status(pid, nid_storage::profile_repo::STATUS_QUARANTINED);
+            let _ = fidelity_repo.record(
+                Some(id.as_str()),
+                pid,
+                "dsl_budget_exceeded",
+                None,
+                None,
+                None,
+                Some("DSL execution budget exceeded; profile quarantined"),
+            );
+        }
+
+        // Rolling bypass score → quarantine the profile if it's been
+        // gamed past threshold (plan §8.2). Honour the warmup window.
+        let observed = fidelity_repo.distinct_sessions_for(pid).unwrap_or(0) as usize;
+        if observed > cfg.fidelity.bypass_warmup_runs {
+            let (score, _n) = fidelity_repo
+                .rolling_bypass_score(pid, 100)
+                .unwrap_or((0.0, 0));
+            if score as f32 > cfg.fidelity.bypass_threshold {
+                let _ = profile_repo.set_status(pid, nid_storage::profile_repo::STATUS_QUARANTINED);
+                let _ = fidelity_repo.record(
+                    Some(id.as_str()),
+                    pid,
+                    "bypass_threshold_exceeded",
+                    None,
+                    Some(score),
+                    None,
+                    Some(&format!(
+                        "rolling score {score:.3} > threshold {}",
+                        cfg.fidelity.bypass_threshold
+                    )),
+                );
+                tracing::warn!(
+                    fp = %fp,
+                    profile_id = pid,
+                    score = score,
+                    "profile quarantined: rolling bypass score exceeded threshold"
+                );
+            }
         }
     }
 
@@ -346,10 +454,15 @@ fn install_sigterm_trap(flag: Arc<AtomicBool>) {
     });
 }
 
+/// Spawn a shell command, capture stdout+stderr up to `cap_bytes` (None = no
+/// cap). Returns (exit_code, combined_output, truncated_flag).
+/// Bounded capture prevents OOM on pathological command output (plan §11.3
+/// `max_total_mb`).
 async fn spawn_and_capture(
     argv: &[String],
     _interrupted: Arc<AtomicBool>,
-) -> Result<(i32, String)> {
+    cap_bytes: Option<usize>,
+) -> Result<(i32, String, bool)> {
     let joined = argv.join(" ");
     let mut shell_cmd: TokioCommand = if cfg!(target_os = "windows") {
         let mut c = TokioCommand::new("cmd");
@@ -365,24 +478,57 @@ async fn spawn_and_capture(
         .stderr(std::process::Stdio::piped())
         .spawn()?;
 
-    let mut stdout = child.stdout.take().unwrap();
-    let mut stderr = child.stderr.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
 
-    let mut out_buf = String::new();
-    let mut err_buf = String::new();
+    // Per-stream half-cap so stdout and stderr can't together breach cap_bytes.
+    let half = cap_bytes.map(|n| n / 2);
+    let out_fut = read_capped(stdout, half);
+    let err_fut = read_capped(stderr, half);
+    let (out_res, err_res, status_res) = tokio::join!(out_fut, err_fut, child.wait());
+    let (out_buf, out_trunc) = out_res?;
+    let (err_buf, err_trunc) = err_res?;
+    let status = status_res?;
 
-    let (_oa, _ob, status) = tokio::join!(
-        stdout.read_to_string(&mut out_buf),
-        stderr.read_to_string(&mut err_buf),
-        child.wait(),
-    );
-    let status = status?;
     let mut combined = out_buf;
     if !err_buf.is_empty() {
         combined.push_str(&err_buf);
     }
+    let truncated = out_trunc || err_trunc;
+    if truncated {
+        combined.push_str("\n--- [nid: output truncated at capture cap] ---\n");
+    }
     let code = status.code().unwrap_or(-1);
-    Ok((code, combined))
+    Ok((code, combined, truncated))
+}
+
+async fn read_capped<R: tokio::io::AsyncRead + Unpin>(
+    mut r: R,
+    cap_bytes: Option<usize>,
+) -> std::io::Result<(String, bool)> {
+    use tokio::io::AsyncReadExt as _;
+    let mut buf = Vec::with_capacity(4096);
+    let mut truncated = false;
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = r.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        if let Some(cap) = cap_bytes {
+            if buf.len() + n > cap {
+                let take = cap.saturating_sub(buf.len());
+                buf.extend_from_slice(&chunk[..take]);
+                truncated = true;
+                // Drain remaining output without buffering it, otherwise the
+                // child can block on a full pipe.
+                while r.read(&mut chunk).await? > 0 {}
+                break;
+            }
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
+    Ok((String::from_utf8_lossy(&buf).into_owned(), truncated))
 }
 
 fn unix_now() -> i64 {
@@ -497,7 +643,11 @@ fn opportunistic_retention_purge(
     let cutoff = now as i64 - (retention_days as i64 * 86400);
     let sessions = SessionRepo::new(db);
     let released = sessions.purge_older_than(cutoff)?;
-    for (raw, cmp) in released.iter().take(256) {
+    // Release all blob refs for purged sessions (no arbitrary cap). The
+    // 100ms opportunistic budget is enforced by the once-per-day marker,
+    // not by partially releasing blobs — leaving refs dangling between
+    // runs was a real storage-leak bug.
+    for (raw, cmp) in &released {
         if !raw.is_empty() {
             let _ = store.release(raw);
         }
@@ -508,6 +658,53 @@ fn opportunistic_retention_purge(
     Ok(())
 }
 
+/// Per-fingerprint advisory lock backed by an O_EXCL|O_CREAT file.
+/// Dropped on Drop (removes the file). Stale locks older than 10 min are
+/// ignored to prevent permanent deadlock if a previous run crashed.
+struct SynthLock {
+    path: std::path::PathBuf,
+}
+
+impl SynthLock {
+    fn try_acquire(paths: &nid_storage::NidPaths, fp: &str) -> Option<Self> {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(fp.as_bytes());
+        let name = hex::encode(&h.finalize()[..8]);
+        let dir = paths.data_dir.join("synth_locks");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join(format!("{name}.lock"));
+
+        // If the lock is stale (>10 min old), clean it.
+        if let Ok(md) = std::fs::metadata(&path) {
+            if let Ok(modified) = md.modified() {
+                if std::time::SystemTime::now()
+                    .duration_since(modified)
+                    .map(|d| d.as_secs() > 600)
+                    .unwrap_or(false)
+                {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
+        }
+
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(_) => Some(SynthLock { path }),
+            Err(_) => None,
+        }
+    }
+}
+
+impl Drop for SynthLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 /// Auto-synthesis on lock-in (plan §7.3).
 async fn try_auto_synthesize(
     fp: &str,
@@ -516,6 +713,7 @@ async fn try_auto_synthesize(
     profile_repo: &ProfileRepo<'_>,
     lock_in_n: usize,
     fast_path_zv: bool,
+    paths: &nid_storage::NidPaths,
 ) -> anyhow::Result<()> {
     let rows = samples_repo.for_fingerprint(fp)?;
     let mut samples: Vec<String> = Vec::with_capacity(rows.len());
@@ -533,6 +731,22 @@ async fn try_auto_synthesize(
         return Ok(());
     }
 
+    // Cross-process advisory lock so two concurrent nid invocations don't
+    // both run synthesis for the same fingerprint (M-R3). Lock file is
+    // per-fingerprint (hash of the fp into a filename).
+    let _guard = match SynthLock::try_acquire(paths, fp) {
+        Some(g) => g,
+        None => {
+            tracing::info!(fp = fp, "auto-synthesis already in progress; skipping");
+            return Ok(());
+        }
+    };
+    // Re-check after acquiring the lock — the winning process may have
+    // already promoted a profile.
+    if profile_repo.active_for(fp)?.is_some() {
+        return Ok(());
+    }
+
     let backend = nid_synthesis::autodetect();
     let out =
         nid_synthesis::orchestrator::synthesize_from_samples(fp, &samples, |prompt| async move {
@@ -542,7 +756,22 @@ async fn try_auto_synthesize(
 
     nid_dsl::validator::validate_profile(&out.profile)?;
     for s in &samples {
-        let compressed = nid_dsl::interpreter::apply_rules(s, &out.profile.rules).to_string();
+        // Budgeted self-test: a synthesized profile that aborts the budget
+        // on any of its own training samples is pathological and must not
+        // be promoted.
+        let co = nid_dsl::interpreter::apply_rules_with_budget(
+            s,
+            &out.profile.rules,
+            nid_dsl::Budget::default(),
+        );
+        if co.budget_aborted {
+            tracing::warn!(
+                fp = fp,
+                "auto-synthesis budget aborted on a training sample; rejecting"
+            );
+            return Ok(());
+        }
+        let compressed = co.to_string();
         let results =
             nid_dsl::invariants::check_invariants(&out.profile.invariants, s, &compressed)?;
         for r in &results {

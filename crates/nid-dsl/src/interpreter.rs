@@ -38,6 +38,10 @@ pub struct CompressedOutput {
     pub lines: Vec<Line>,
     pub bytes_in: usize,
     pub bytes_out: usize,
+    /// True when the DSL execution budget aborted mid-run. Callers should
+    /// treat this as "degraded" and not persist the resulting compressed
+    /// output as the canonical profile output.
+    pub budget_aborted: bool,
 }
 
 impl std::fmt::Display for CompressedOutput {
@@ -50,10 +54,22 @@ impl std::fmt::Display for CompressedOutput {
     }
 }
 
-/// Run the rule list against `input`. Returns the final compressed output.
+/// Run the rule list against `input`. Uses the default execution budget
+/// (plan Appendix B). On budget overrun, returns the best-effort partial
+/// result — callers should check `.budget_aborted`.
 pub fn apply_rules(input: &str, rules: &[Rule]) -> CompressedOutput {
+    apply_rules_with_budget(input, rules, crate::budget::Budget::default())
+}
+
+/// Bounded variant: abort if any of (max_steps, max_wallclock_ms,
+/// max_peak_bytes) is exceeded. Returns the partial output with
+/// `budget_aborted=true`.
+pub fn apply_rules_with_budget(
+    input: &str,
+    rules: &[Rule],
+    budget: crate::budget::Budget,
+) -> CompressedOutput {
     let bytes_in = input.len();
-    // Initial line split: preserve each line as Verbatim.
     let mut lines: Vec<Line> = input
         .split_inclusive('\n')
         .map(|l| Line::Verbatim {
@@ -61,16 +77,23 @@ pub fn apply_rules(input: &str, rules: &[Rule]) -> CompressedOutput {
         })
         .collect();
 
-    // If input had a trailing newline, split_inclusive leaves the last line empty.
-    // We keep empty lines because rules like drop_lines may specifically target them.
     if let Some(last) = lines.last() {
         if last.as_str().is_empty() && !input.ends_with('\n') {
             lines.pop();
         }
     }
 
+    let mut runner = crate::budget::BudgetRunner::new(budget);
+    let mut aborted = false;
     for rule in rules {
-        lines = apply_one(lines, &rule.kind);
+        let taken = std::mem::take(&mut lines);
+        match apply_one_bounded(taken, &rule.kind, &mut runner) {
+            Ok(next) => lines = next,
+            Err(_) => {
+                aborted = true;
+                break;
+            }
+        }
     }
 
     let bytes_out: usize = lines.iter().map(|l| l.as_str().len() + 1).sum();
@@ -78,196 +101,92 @@ pub fn apply_rules(input: &str, rules: &[Rule]) -> CompressedOutput {
         lines,
         bytes_in,
         bytes_out,
+        budget_aborted: aborted,
     }
 }
 
-fn apply_one(lines: Vec<Line>, kind: &RuleKind) -> Vec<Line> {
-    match kind {
+fn apply_one_bounded(
+    lines: Vec<Line>,
+    kind: &RuleKind,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    // Observe the input size as a proxy for peak memory before processing.
+    let total_bytes: usize = lines.iter().map(|l| l.as_str().len()).sum();
+    r.observe_bytes(total_bytes)?;
+
+    let out = match kind {
         RuleKind::KeepLines { match_ } => {
             let re = compile(match_);
-            lines
-                .into_iter()
-                .filter(|l| !l.is_verbatim() || re.is_match(l.as_str()))
-                .collect()
+            let mut out = Vec::with_capacity(lines.len());
+            for l in lines {
+                r.tick()?;
+                if !l.is_verbatim() || re.is_match(l.as_str()) {
+                    out.push(l);
+                }
+            }
+            out
         }
         RuleKind::DropLines { match_ } => {
             let re = compile(match_);
-            lines
-                .into_iter()
-                .filter(|l| !(l.is_verbatim() && re.is_match(l.as_str())))
-                .collect()
+            let mut out = Vec::with_capacity(lines.len());
+            for l in lines {
+                r.tick()?;
+                if !(l.is_verbatim() && re.is_match(l.as_str())) {
+                    out.push(l);
+                }
+            }
+            out
         }
         RuleKind::CollapseRepeated {
             pattern,
             placeholder,
             min,
-        } => collapse_repeated(lines, pattern, placeholder, *min),
+        } => collapse_repeated_bounded(lines, pattern, placeholder, *min, r)?,
         RuleKind::CollapseBetween {
             begin,
             end,
             placeholder,
-        } => collapse_between(lines, begin, end, placeholder),
-        RuleKind::Head { n } => lines.into_iter().take(*n).collect(),
+        } => collapse_between_bounded(lines, begin, end, placeholder, r)?,
+        RuleKind::Head { n } => {
+            let mut out = Vec::with_capacity(*n);
+            for l in lines.into_iter().take(*n) {
+                r.tick()?;
+                out.push(l);
+            }
+            out
+        }
         RuleKind::Tail { n } => {
             let n = *n;
             let len = lines.len();
-            lines.into_iter().skip(len.saturating_sub(n)).collect()
+            let mut out = Vec::with_capacity(n.min(len));
+            for l in lines.into_iter().skip(len.saturating_sub(n)) {
+                r.tick()?;
+                out.push(l);
+            }
+            out
         }
-        RuleKind::HeadAfter { n, after_match } => head_after(lines, *n, after_match),
-        RuleKind::TailBefore { n, before_match } => tail_before(lines, *n, before_match),
-        RuleKind::Dedup => dedup_adjacent(lines),
-        RuleKind::StripAnsi => strip_ansi(lines),
+        RuleKind::HeadAfter { n, after_match } => head_after_bounded(lines, *n, after_match, r)?,
+        RuleKind::TailBefore { n, before_match } => {
+            tail_before_bounded(lines, *n, before_match, r)?
+        }
+        RuleKind::Dedup => dedup_adjacent_bounded(lines, r)?,
+        RuleKind::StripAnsi => strip_ansi_bounded(lines, r)?,
         RuleKind::JsonPathKeep { paths } => json_path_keep(lines, paths),
         RuleKind::JsonPathDrop { paths } => json_path_drop(lines, paths),
         RuleKind::NdjsonFilter { field, keep_values } => ndjson_filter(lines, field, keep_values),
-        RuleKind::StateMachine { states } => state_machine(lines, states),
+        RuleKind::StateMachine { states } => state_machine_bounded(lines, states, r)?,
         RuleKind::TruncateTo { bytes } => truncate_to(lines, *bytes),
-    }
+    };
+    // Re-observe post-rule.
+    let out_bytes: usize = out.iter().map(|l| l.as_str().len()).sum();
+    r.observe_bytes(out_bytes)?;
+    Ok(out)
 }
 
 fn compile(src: &str) -> Regex {
     // Validator guarantees this compiles. If somehow we got here on an invalid
     // regex, fail closed with a match-nothing pattern.
     Regex::new(src).unwrap_or_else(|_| Regex::new("a\\A").unwrap())
-}
-
-fn dedup_adjacent(lines: Vec<Line>) -> Vec<Line> {
-    let mut out = Vec::with_capacity(lines.len());
-    let mut last: Option<String> = None;
-    for l in lines {
-        let s = l.as_str().to_string();
-        if last.as_deref() == Some(s.as_str()) {
-            continue;
-        }
-        last = Some(s);
-        out.push(l);
-    }
-    out
-}
-
-fn strip_ansi(lines: Vec<Line>) -> Vec<Line> {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").unwrap());
-    lines
-        .into_iter()
-        .map(|l| match l {
-            Line::Verbatim { text } => Line::Verbatim {
-                text: re.replace_all(&text, "").into_owned(),
-            },
-            other => other,
-        })
-        .collect()
-}
-
-fn collapse_repeated(lines: Vec<Line>, pattern: &str, placeholder: &str, min: usize) -> Vec<Line> {
-    let re = compile(pattern);
-    let mut out = Vec::with_capacity(lines.len());
-    let mut run_start: Option<usize> = None;
-
-    let flush = |run_start: Option<usize>, i: usize, out: &mut Vec<Line>, src: &[Line]| {
-        if let Some(start) = run_start {
-            let count = i - start;
-            if count >= min {
-                out.push(Line::Placeholder {
-                    text: placeholder.replace("{count}", &count.to_string()),
-                });
-            } else {
-                for l in &src[start..i] {
-                    out.push(l.clone());
-                }
-            }
-        }
-    };
-
-    for (i, l) in lines.iter().enumerate() {
-        let matches = l.is_verbatim() && re.is_match(l.as_str());
-        if matches {
-            if run_start.is_none() {
-                run_start = Some(i);
-            }
-        } else {
-            flush(run_start, i, &mut out, &lines);
-            run_start = None;
-            out.push(l.clone());
-        }
-    }
-    flush(run_start, lines.len(), &mut out, &lines);
-    out
-}
-
-fn collapse_between(lines: Vec<Line>, begin: &str, end: &str, placeholder: &str) -> Vec<Line> {
-    let bre = compile(begin);
-    let ere = compile(end);
-    let mut out = Vec::with_capacity(lines.len());
-    let mut inside = false;
-    let mut inside_count = 0usize;
-    for l in lines {
-        if !inside {
-            if l.is_verbatim() && bre.is_match(l.as_str()) {
-                inside = true;
-                inside_count = 0;
-                out.push(l);
-            } else {
-                out.push(l);
-            }
-        } else if l.is_verbatim() && ere.is_match(l.as_str()) {
-            out.push(Line::Placeholder {
-                text: placeholder.replace("{count}", &inside_count.to_string()),
-            });
-            out.push(l);
-            inside = false;
-        } else {
-            inside_count += 1;
-            // skip (collapsed)
-        }
-    }
-    // If we ended inside, still emit the placeholder so output reflects the collapse.
-    if inside && inside_count > 0 {
-        out.push(Line::Placeholder {
-            text: placeholder.replace("{count}", &inside_count.to_string()),
-        });
-    }
-    out
-}
-
-fn head_after(lines: Vec<Line>, n: usize, after_match: &str) -> Vec<Line> {
-    let re = compile(after_match);
-    let mut out = Vec::with_capacity(lines.len());
-    let mut found = false;
-    let mut kept = 0usize;
-    for l in lines {
-        if !found {
-            out.push(l.clone());
-            if l.is_verbatim() && re.is_match(l.as_str()) {
-                found = true;
-            }
-        } else if kept < n {
-            out.push(l);
-            kept += 1;
-        } else {
-            break;
-        }
-    }
-    out
-}
-
-fn tail_before(lines: Vec<Line>, n: usize, before_match: &str) -> Vec<Line> {
-    let re = compile(before_match);
-    // Find first match; keep the `n` lines immediately before it.
-    let mut idx = None;
-    for (i, l) in lines.iter().enumerate() {
-        if l.is_verbatim() && re.is_match(l.as_str()) {
-            idx = Some(i);
-            break;
-        }
-    }
-    let Some(i) = idx else { return lines };
-    let start = i.saturating_sub(n);
-    let mut out = Vec::with_capacity(n + (lines.len() - i));
-    for l in lines.iter().skip(start) {
-        out.push(l.clone());
-    }
-    out
 }
 
 fn truncate_to(lines: Vec<Line>, bytes: usize) -> Vec<Line> {
@@ -351,8 +270,185 @@ fn ndjson_filter(lines: Vec<Line>, field: &str, keep_values: &[String]) -> Vec<L
         .collect()
 }
 
-fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
-    // Compile all regexes up-front.
+// ---- Bounded variants. Each wraps the corresponding unbounded fn in a
+//      per-iteration `r.tick()?`. Kept alongside (not in-place) so legacy
+//      callers (synthesis, tests) keep working.
+
+fn collapse_repeated_bounded(
+    lines: Vec<Line>,
+    pattern: &str,
+    placeholder: &str,
+    min: usize,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    let re = compile(pattern);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut run_start: Option<usize> = None;
+    let flush = |run_start: Option<usize>, i: usize, out: &mut Vec<Line>, src: &[Line]| {
+        if let Some(start) = run_start {
+            let count = i - start;
+            if count >= min {
+                out.push(Line::Placeholder {
+                    text: placeholder.replace("{count}", &count.to_string()),
+                });
+            } else {
+                for l in &src[start..i] {
+                    out.push(l.clone());
+                }
+            }
+        }
+    };
+    for (i, l) in lines.iter().enumerate() {
+        r.tick()?;
+        let matches = l.is_verbatim() && re.is_match(l.as_str());
+        if matches {
+            if run_start.is_none() {
+                run_start = Some(i);
+            }
+        } else {
+            flush(run_start, i, &mut out, &lines);
+            run_start = None;
+            out.push(l.clone());
+        }
+    }
+    flush(run_start, lines.len(), &mut out, &lines);
+    Ok(out)
+}
+
+fn collapse_between_bounded(
+    lines: Vec<Line>,
+    begin: &str,
+    end: &str,
+    placeholder: &str,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    let bre = compile(begin);
+    let ere = compile(end);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut inside = false;
+    let mut inside_count = 0usize;
+    for l in lines {
+        r.tick()?;
+        if !inside {
+            if l.is_verbatim() && bre.is_match(l.as_str()) {
+                inside = true;
+                inside_count = 0;
+                out.push(l);
+            } else {
+                out.push(l);
+            }
+        } else if l.is_verbatim() && ere.is_match(l.as_str()) {
+            out.push(Line::Placeholder {
+                text: placeholder.replace("{count}", &inside_count.to_string()),
+            });
+            out.push(l);
+            inside = false;
+        } else {
+            inside_count += 1;
+        }
+    }
+    if inside && inside_count > 0 {
+        out.push(Line::Placeholder {
+            text: placeholder.replace("{count}", &inside_count.to_string()),
+        });
+    }
+    Ok(out)
+}
+
+fn head_after_bounded(
+    lines: Vec<Line>,
+    n: usize,
+    after_match: &str,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    let re = compile(after_match);
+    let mut out = Vec::with_capacity(lines.len());
+    let mut found = false;
+    let mut kept = 0usize;
+    for l in lines {
+        r.tick()?;
+        if !found {
+            out.push(l.clone());
+            if l.is_verbatim() && re.is_match(l.as_str()) {
+                found = true;
+            }
+        } else if kept < n {
+            out.push(l);
+            kept += 1;
+        } else {
+            break;
+        }
+    }
+    Ok(out)
+}
+
+fn tail_before_bounded(
+    lines: Vec<Line>,
+    n: usize,
+    before_match: &str,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    let re = compile(before_match);
+    let mut idx = None;
+    for (i, l) in lines.iter().enumerate() {
+        r.tick()?;
+        if l.is_verbatim() && re.is_match(l.as_str()) {
+            idx = Some(i);
+            break;
+        }
+    }
+    let Some(i) = idx else { return Ok(lines) };
+    let start = i.saturating_sub(n);
+    let mut out = Vec::with_capacity(n + (lines.len() - i));
+    for l in lines.iter().skip(start) {
+        r.tick()?;
+        out.push(l.clone());
+    }
+    Ok(out)
+}
+
+fn dedup_adjacent_bounded(
+    lines: Vec<Line>,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut last: Option<String> = None;
+    for l in lines {
+        r.tick()?;
+        let s = l.as_str().to_string();
+        if last.as_deref() == Some(s.as_str()) {
+            continue;
+        }
+        last = Some(s);
+        out.push(l);
+    }
+    Ok(out)
+}
+
+fn strip_ansi_bounded(
+    lines: Vec<Line>,
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]").unwrap());
+    let mut out = Vec::with_capacity(lines.len());
+    for l in lines {
+        r.tick()?;
+        out.push(match l {
+            Line::Verbatim { text } => Line::Verbatim {
+                text: re.replace_all(&text, "").into_owned(),
+            },
+            other => other,
+        });
+    }
+    Ok(out)
+}
+
+fn state_machine_bounded(
+    lines: Vec<Line>,
+    states: &[StateDef],
+    r: &mut crate::budget::BudgetRunner,
+) -> Result<Vec<Line>, crate::budget::BudgetError> {
     struct Compiled {
         enter: Regex,
         keep: Vec<Regex>,
@@ -366,16 +462,14 @@ fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
             drop: s.drop.iter().map(|r| compile(r)).collect(),
         })
         .collect();
-
     let mut active: Option<usize> = None;
     let mut out = Vec::with_capacity(lines.len());
-
     for l in lines {
+        r.tick()?;
         if !l.is_verbatim() {
             out.push(l);
             continue;
         }
-        // Try to transition.
         for (i, c) in compiled.iter().enumerate() {
             if c.enter.is_match(l.as_str()) {
                 active = Some(i);
@@ -383,7 +477,7 @@ fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
             }
         }
         let keep = match active {
-            None => true, // no active state — pass through
+            None => true,
             Some(i) => {
                 let c = &compiled[i];
                 if c.drop.iter().any(|re| re.is_match(l.as_str())) {
@@ -399,7 +493,7 @@ fn state_machine(lines: Vec<Line>, states: &[StateDef]) -> Vec<Line> {
             out.push(l);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Minimal JSONPath walk: `$`, `.key`, `[n]`.

@@ -217,33 +217,61 @@ fn extract_and_verify(bytes: &[u8]) -> Result<(Vec<u8>, ReleaseManifest)> {
     }
 
     // Trust: require the signer to be reachable from the anchor, or equal
-    // to it. In v0.1 we ship no pinned anchor; the check is best-effort.
-    if let Some(anchor_pubkey) = shipped_release_anchor() {
-        if signing::key_id(&anchor_pubkey) != manifest.signer_key_id {
-            manifest
-                .rotation_chain
-                .resolve(&anchor_pubkey, &manifest.signer_key_id)
-                .context("release signer not reachable from shipped release anchor")?;
+    // to it.
+    //
+    // When `NID_RELEASE_ANCHOR_HEX` is baked in at build time, the release
+    // signer MUST match (or be reachable via the tarball's rotation chain
+    // from) that pubkey. No escape hatch — this is the production path.
+    //
+    // When the anchor is NOT baked in (`cargo install` of a development
+    // build), we refuse signed updates by default and require the user
+    // to set `NID_RELEASE_ALLOW_UNANCHORED=1`. This makes `nid update --from`
+    // on unanchored builds explicit rather than silent.
+    match shipped_release_anchor() {
+        Some(anchor_pubkey) => {
+            if signing::key_id(&anchor_pubkey) != manifest.signer_key_id {
+                manifest
+                    .rotation_chain
+                    .resolve(&anchor_pubkey, &manifest.signer_key_id)
+                    .context("release signer not reachable from shipped release anchor")?;
+            }
         }
-    } else {
-        // No anchor shipped — accept the signed tarball on self-trust (the
-        // binary is free to install what the user asked for via `--from`).
-        tracing::warn!(
-            "no release anchor pinned in this nid build; trusting the tarball's signer by self-assertion"
-        );
+        None => {
+            if std::env::var("NID_RELEASE_ALLOW_UNANCHORED")
+                .ok()
+                .as_deref()
+                != Some("1")
+            {
+                anyhow::bail!(
+                    "this nid build has no pinned release anchor; refusing to install a signed \
+                     tarball on self-trust. Re-run with NID_RELEASE_ALLOW_UNANCHORED=1 if you \
+                     genuinely meant to. The production release channel bakes an anchor at \
+                     build time (NID_RELEASE_ANCHOR_HEX)."
+                );
+            }
+            eprintln!(
+                "WARNING: this nid build has no pinned release anchor. Installing on \
+                 self-trust because NID_RELEASE_ALLOW_UNANCHORED=1 is set."
+            );
+        }
     }
 
     Ok((binary, manifest))
 }
 
-/// Pinned release anchor pubkey, if the build embedded one. v0.1 does not
-/// ship a pinned anchor; future builds will include bytes via include_bytes!.
+/// Pinned release anchor pubkey, if the build embedded one. Set at build
+/// time via `NID_RELEASE_ANCHOR_HEX` (64 hex chars = 32 raw bytes).
 fn shipped_release_anchor() -> Option<ed25519_dalek::VerifyingKey> {
-    // Placeholder: returns None for now. When a real release ships, replace
-    // with:
-    //   const ANCHOR: &[u8; 32] = include_bytes!("../../../release-anchor.pub");
-    //   signing::pubkey_from_bytes(ANCHOR).ok()
-    None
+    let hex_str = option_env!("NID_RELEASE_ANCHOR_HEX")?;
+    let bytes = hex::decode(hex_str.trim()).ok()?;
+    if bytes.len() != 32 {
+        tracing::error!(
+            "NID_RELEASE_ANCHOR_HEX was set but decoded to {} bytes (expected 32); ignoring",
+            bytes.len()
+        );
+        return None;
+    }
+    signing::pubkey_from_bytes(&bytes).ok()
 }
 
 fn target_triple() -> &'static str {

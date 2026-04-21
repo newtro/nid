@@ -31,6 +31,10 @@ impl Db {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
+        // Retry for up to 500ms on SQLITE_BUSY before returning the error.
+        // Multi-process nid (multiple agent hooks firing in parallel) can
+        // race on bump_gain_daily / purge_older_than / fidelity_events writes.
+        conn.busy_timeout(std::time::Duration::from_millis(500))?;
         let db = Db {
             conn: Mutex::new(conn),
             path: path.to_path_buf(),

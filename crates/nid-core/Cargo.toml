@@ -17,6 +17,7 @@ tracing.workspace = true
 rand.workspace = true
 hex.workspace = true
 ed25519-dalek.workspace = true
+aes-gcm.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

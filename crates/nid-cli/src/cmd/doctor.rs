@@ -133,6 +133,25 @@ pub async fn run() -> Result<()> {
         }
     }
 
+    // -- Recent unredacted accesses (L-R5). Plan §11.3: `nid show
+    //    --raw-unredacted` logs an audit entry; surface the last 5 here so
+    //    users/auditors can see who's been reading raw.
+    let log_path = paths.data_dir.join("show_access.log");
+    if let Ok(body) = std::fs::read_to_string(&log_path) {
+        let lines: Vec<&str> = body.lines().collect();
+        if !lines.is_empty() {
+            println!(
+                "  audit:      {} unredacted-access event(s) in {}",
+                lines.len(),
+                log_path.display()
+            );
+            println!("              (last 5 shown)");
+            for line in lines.iter().rev().take(5) {
+                println!("              {line}");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -175,11 +194,71 @@ fn probe_ollama() -> bool {
     std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(200)).is_ok()
 }
 
-/// Counts `command` entries that look like nid-compatible hook rewrites,
-/// *minus* the one nid installed itself.
+/// Counts hook entries under `hooks.PreToolUse[*]` whose command does NOT
+/// contain `__hook` (i.e., are not our own). Pure-JSON walk; the old
+/// `matches("\"command\"")` substring approach over-counted any time a
+/// user config used `"command"` as a property name anywhere.
 fn count_other_bash_hooks(json_text: &str) -> usize {
-    // We look for `"command"` occurrences that aren't our own `nid __hook`.
-    let total = json_text.matches("\"command\"").count();
-    let ours = json_text.matches("__hook").count();
-    total.saturating_sub(ours)
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(json_text) else {
+        return 0;
+    };
+    let Some(pretool) = doc
+        .get("hooks")
+        .and_then(|h| h.get("PreToolUse"))
+        .and_then(|p| p.as_array())
+    else {
+        return 0;
+    };
+    let mut count = 0usize;
+    for entry in pretool {
+        // Only count Bash-matched hooks.
+        let matcher_is_bash = entry
+            .get("matcher")
+            .and_then(|m| m.as_str())
+            .map(|s| s.eq_ignore_ascii_case("bash"))
+            .unwrap_or(false);
+        if !matcher_is_bash {
+            continue;
+        }
+        let Some(hooks) = entry.get("hooks").and_then(|h| h.as_array()) else {
+            continue;
+        };
+        for h in hooks {
+            if let Some(cmd) = h.get("command").and_then(|c| c.as_str()) {
+                if !cmd.contains("__hook") {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_only_non_nid_bash_hooks() {
+        let j = r#"{
+            "hooks": {
+                "PreToolUse": [
+                    { "matcher": "Bash", "hooks": [{"type":"command","command":"/opt/nid/bin/nid __hook claude_code"}] },
+                    { "matcher": "Edit", "hooks": [{"type":"command","command":"do-something"}] },
+                    { "matcher": "Bash", "hooks": [{"type":"command","command":"other-tool"}] }
+                ]
+            }
+        }"#;
+        assert_eq!(count_other_bash_hooks(j), 1);
+    }
+
+    #[test]
+    fn no_hooks_means_zero() {
+        assert_eq!(count_other_bash_hooks("{}"), 0);
+    }
+
+    #[test]
+    fn non_json_returns_zero() {
+        assert_eq!(count_other_bash_hooks("not json"), 0);
+    }
 }

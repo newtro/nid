@@ -89,10 +89,14 @@ async fn purge(fingerprint: String) -> Result<()> {
     let db = Db::open(&paths.db_path)?;
     let repo = ProfileRepo::new(&db);
     let store = BlobStore::new(&db, &paths.blobs_dir);
-    let rows = repo.list()?;
+    let rows = repo.list_by_fingerprint(&fingerprint)?;
     let mut count = 0usize;
-    for r in rows.iter().filter(|r| r.fingerprint == fingerprint) {
-        if let Some(sha) = repo.purge(r.id)? {
+    for r in rows {
+        let (dsl_sha, rubric_sha) = repo.purge(r.id)?;
+        if let Some(sha) = dsl_sha {
+            let _ = store.release(&sha);
+        }
+        if let Some(sha) = rubric_sha {
             let _ = store.release(&sha);
         }
         count += 1;

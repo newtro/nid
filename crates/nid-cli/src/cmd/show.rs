@@ -1,26 +1,28 @@
 //! `nid show <session-id> [--raw-unredacted]` — retrieve a prior session's
-//! raw output (plan §4.1, §11.3).
+//! raw output (plan §4.1, §11.1, §11.3).
 //!
-//! Default: re-applies redaction on top of whatever's in the blob store.
-//! Raw blobs are redacted pre-persistence so this is normally a no-op, but
-//! it's defence in depth and matches the plan's "`nid show` always redacts".
+//! Raw blobs are stored AES-GCM-sealed and UNREDACTED (plan §11.1). On read:
 //!
-//! `--raw-unredacted`: requires interactive confirmation + appends an access
-//! entry to `<data>/show_access.log`. If stdin isn't a tty and
-//! `NID_UNREDACTED_OK=1` isn't set, the command refuses.
+//! - default path: decrypt, then apply `redact::redact` before emitting.
+//! - `--raw-unredacted`: decrypt, emit plaintext. Requires interactive
+//!   "yes" confirmation on tty (or `NID_UNREDACTED_OK=1`). Appends an
+//!   access entry to `<data>/show_access.log`.
+//!
+//! If the raw blob is not an AES-GCM payload (legacy redacted-only raws
+//! from earlier nid versions), we fall back to treating it as plaintext
+//! and re-redacting.
 
 use anyhow::{Context, Result};
 use clap::Args;
-use nid_core::redact;
+use nid_core::{redact, sealed};
 use nid_storage::{blob::BlobStore, session_repo::SessionRepo, Db};
 use std::io::{BufRead, Write};
 
 #[derive(Debug, Args)]
 pub struct ShowArgs {
     pub session_id: String,
-    /// Skip the re-redact pass on top of the stored blob. Requires
-    /// interactive confirmation (or `NID_UNREDACTED_OK=1`) and writes an
-    /// access-log entry.
+    /// Emit the UNREDACTED raw. Requires interactive 'yes' confirmation
+    /// (or NID_UNREDACTED_OK=1) and appends an access-log entry.
     #[arg(long)]
     pub raw_unredacted: bool,
 }
@@ -37,31 +39,40 @@ pub async fn run(args: ShowArgs) -> Result<()> {
         .raw_blob_sha256
         .ok_or_else(|| anyhow::anyhow!("session has no raw blob"))?;
     let bytes = store.get(&sha)?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+
+    let plaintext = match try_unseal(&bytes, &paths.local_key) {
+        Some(s) => s,
+        None => String::from_utf8_lossy(&bytes).into_owned(),
+    };
 
     if args.raw_unredacted {
         if !confirm_unredacted_access(&args.session_id)? {
             anyhow::bail!("unredacted access refused");
         }
         append_access_log(&paths.data_dir, &args.session_id).context("writing access log")?;
-        print!("{text}");
+        print!("{plaintext}");
     } else {
-        // Defence-in-depth re-redact — even though raw was redacted pre-
-        // persistence, any new pattern added since ingestion would catch here.
-        print!("{}", redact::redact(&text));
+        print!("{}", redact::redact(&plaintext));
     }
     Ok(())
 }
 
+fn try_unseal(bytes: &[u8], key_path: &std::path::Path) -> Option<String> {
+    if bytes.is_empty() || bytes[0] != 1 {
+        return None;
+    }
+    let key = sealed::load_or_create_key(key_path).ok()?;
+    let plaintext = sealed::open(bytes, &key).ok()?;
+    Some(String::from_utf8_lossy(&plaintext).into_owned())
+}
+
 fn confirm_unredacted_access(session_id: &str) -> Result<bool> {
-    // Explicit env-var escape for non-interactive use (agents that have
-    // already shown the user a confirmation prompt in their own UI).
     if std::env::var("NID_UNREDACTED_OK").ok().as_deref() == Some("1") {
         return Ok(true);
     }
     eprint!(
         "WARNING: --raw-unredacted will emit unredacted raw output for session {session_id}.\n\
-         This may expose secrets that were redacted at capture time.\n\
+         This may expose secrets that were captured at session time.\n\
          Type 'yes' to continue: "
     );
     std::io::stderr().flush().ok();

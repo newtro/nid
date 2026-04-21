@@ -21,55 +21,101 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact: nid-x86_64-unknown-linux-musl.nidrel
+            bin_suffix: ""
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             artifact: nid-aarch64-unknown-linux-gnu.nidrel
+            bin_suffix: ""
           - os: macos-14
             target: x86_64-apple-darwin
             artifact: nid-x86_64-apple-darwin.nidrel
+            bin_suffix: ""
           - os: macos-14
             target: aarch64-apple-darwin
             artifact: nid-aarch64-apple-darwin.nidrel
+            bin_suffix: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: nid-x86_64-pc-windows-msvc.nidrel
+            bin_suffix: ".exe"
     runs-on: ${{ matrix.os }}
     env:
       NID_TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust
+      - name: Install Rust (stable + target)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install cross tools (musl / aarch64)
-        if: startsWith(matrix.target, 'x86_64-unknown-linux-musl') || startsWith(matrix.target, 'aarch64-unknown-linux-gnu')
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
-      - name: Build
-        run: cargo build --release --workspace --target ${{ matrix.target }}
-      - name: Package signed release tarball
+          sudo apt-get install -y musl-tools
+
+      - name: Install aarch64-linux cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          mkdir -p ~/.cargo
+          cat >> ~/.cargo/config.toml <<'EOF'
+          [target.aarch64-unknown-linux-gnu]
+          linker = "aarch64-linux-gnu-gcc"
+          EOF
+
+      # Build the release binary for the matrix target.
+      - name: Build target binary
+        run: cargo build --release --bin nid --target ${{ matrix.target }}
+
+      # Build the packaging helper for the HOST (not --target), so it runs in CI.
+      - name: Build host packager
+        run: cargo build --release --bin nid-package
+
+      - name: Pack signed release tarball (*nix)
+        if: matrix.os != 'windows-latest'
+        shell: bash
         env:
           NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
         run: |
+          set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
             VERSION="${{ github.event.inputs.tag }}"
             VERSION="${VERSION#v}"
           fi
           if [ -z "$VERSION" ]; then VERSION="0.0.0-unknown"; fi
-          echo "version=$VERSION"
-          TARGET="${{ matrix.target }}"
-          BIN="target/${TARGET}/release/nid"
-          if [ ! -f "$BIN" ]; then BIN="target/${TARGET}/release/nid.exe"; fi
-          cargo run --release --bin nid-package --target "${TARGET}" -- \
+          BIN="target/${{ matrix.target }}/release/nid${{ matrix.bin_suffix }}"
+          PACKAGER="target/release/nid-package${{ matrix.bin_suffix }}"
+          test -f "$BIN"
+          test -f "$PACKAGER"
+          "$PACKAGER" \
             --binary "$BIN" \
             --version "$VERSION" \
-            --target "$TARGET" \
+            --target "${{ matrix.target }}" \
             --output "${{ matrix.artifact }}" \
-            --signing-key-hex "$NID_RELEASE_SIGNING_KEY" \
-            || (
-              echo "nid-package binary not present; using bundled scripts/build_release.sh instead";
-              bash scripts/build_release.sh "$BIN" "$VERSION" "$TARGET" "${{ matrix.artifact }}"
-            )
+            --signing-key-hex "$NID_RELEASE_SIGNING_KEY"
+
+      - name: Pack signed release tarball (windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
+        run: |
+          $Version = $env:GITHUB_REF_NAME -replace '^v',''
+          if (-not $Version -or $Version -eq $env:GITHUB_REF_NAME) {
+            $Version = ($env:INPUT_TAG ?? "0.0.0-unknown") -replace '^v',''
+          }
+          $Bin     = "target/${{ matrix.target }}/release/nid.exe"
+          $Packer  = "target/release/nid-package.exe"
+          & $Packer `
+            --binary $Bin `
+            --version $Version `
+            --target "${{ matrix.target }}" `
+            --output "${{ matrix.artifact }}" `
+            --signing-key-hex $env:NID_RELEASE_SIGNING_KEY
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:

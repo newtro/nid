@@ -211,20 +211,41 @@ impl<'a> ProfileRepo<'a> {
         })
     }
 
-    /// Purge: hard-delete a profile row and return the dsl blob sha so the
-    /// caller can release it. This is destructive; callers should prefer
-    /// `set_status("quarantined")` for reversible disable.
-    pub fn purge(&self, id: i64) -> Result<Option<String>, DbError> {
+    /// Purge: hard-delete a profile row and return (dsl_blob_sha,
+    /// rubric_blob_sha) so the caller can release both. Previously only the
+    /// dsl sha was returned — rubric blobs leaked on purge (M-R2).
+    pub fn purge(&self, id: i64) -> Result<(Option<String>, Option<String>), DbError> {
         self.db.with_conn(|c| {
-            let sha: Option<String> = c
+            let pair: Option<(String, Option<String>)> = c
                 .query_row(
-                    "SELECT dsl_blob_sha256 FROM profiles WHERE id = ?1",
+                    "SELECT dsl_blob_sha256, rubric_blob_sha256 FROM profiles WHERE id = ?1",
                     [id],
-                    |r| r.get(0),
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)),
                 )
                 .ok();
             c.execute("DELETE FROM profiles WHERE id = ?1", [id])?;
-            Ok(sha)
+            Ok(match pair {
+                Some((dsl, rubric)) => (Some(dsl), rubric),
+                None => (None, None),
+            })
+        })
+    }
+
+    /// List every row matching `fingerprint` in any status. Useful for
+    /// `purge <fp>` which needs to release blobs for every historical row.
+    pub fn list_by_fingerprint(&self, fingerprint: &str) -> Result<Vec<ProfileRow>, DbError> {
+        self.db.with_conn(|c| {
+            let mut s = c.prepare(
+                "SELECT id, fingerprint, version, provenance, synthesis_source, status,
+                        dsl_blob_sha256, rubric_blob_sha256, parent_fp, split_on_flag,
+                        created_at, last_used_at, sample_count, fidelity_rolling, signer_key_id
+                 FROM profiles WHERE fingerprint = ?1
+                 ORDER BY created_at DESC",
+            )?;
+            let rows = s
+                .query_map([fingerprint], row_to_profile)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
         })
     }
 

@@ -9,6 +9,7 @@ pub mod context;
 pub mod fingerprint;
 pub mod layers;
 pub mod redact;
+pub mod sealed;
 pub mod session;
 pub mod signing;
 

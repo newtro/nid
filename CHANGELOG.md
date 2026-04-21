@@ -4,7 +4,63 @@ All notable changes to this project will be documented in this file. Format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — production-hardening pass (post-round-2 adversarial review)
+
+**Critical fixes:**
+- Layer 2 format-aware cleanup now actually runs when no profile matches.
+- Auto-synthesis fires on the hot path when sample capture meets the
+  lock-in threshold — the "learned Layer 5" story is real and wired.
+- `nid update --from` has rotation-chain verification, sha256 integrity,
+  and refuses self-signed tarballs when no release anchor is pinned.
+- Shadow mode emits the REDACTED raw output (was leaking secrets).
+- `nid show --raw-unredacted` is now a real policy lever: raw is stored
+  AES-GCM-sealed (encrypted with a machine-local key at `<data>/key`),
+  and the flag decrypts without re-applying redaction under interactive
+  confirmation, with audit logging to `show_access.log`.
+- DSL interpreter now has an execution budget (plan §11.4 / Appendix B):
+  10M steps, 2000ms wallclock, 64MB peak memory. Overrun aborts to
+  Layer-1 output and quarantines the offending profile.
+
+**Security:**
+- Release installs require `NID_RELEASE_ANCHOR_HEX` baked in at build
+  time; without it, signed tarballs are refused unless
+  `NID_RELEASE_ALLOW_UNANCHORED=1` is set explicitly.
+- `security.redaction.deny_commands` opts a command into aggressive
+  redaction (high-entropy sweep).
+- `security.redaction.allow_commands` opts out of default redaction.
+- `session.allow_raw_commands` forces raw persistence even if
+  `preserve_raw=false` globally.
+- `session.max_total_mb` (default 2048) caps per-invocation output
+  capture with a truncation marker.
+- Auto-synthesized profiles that abort their own training-sample budget
+  are rejected.
+- Profile purge now releases both dsl and rubric blobs.
+- `nid profiles import --allow-unsigned` requires interactive confirmation
+  (or `NID_UNTRUSTED_OK=1`).
+
+**Correctness:**
+- SQLite `busy_timeout=500ms` for multi-process hot-path writes.
+- `fidelity_events` `bypass_signal` rows feed a rolling-window score
+  (100-session, 3-run warmup); profiles exceeding threshold get
+  quarantined.
+- Exit-code skew recorded on every finalize when buckets have ≥50 samples.
+- Per-fingerprint advisory lock guards auto-synthesis races.
+- Opportunistic retention purge releases ALL blob refs (was capped at 256).
+- `gain_daily` rollup populated on each finalize.
+- `nid doctor` does real checks: SQLite round-trip, blob round-trip,
+  TCP-probe Ollama, hook-SHA drift detection, JSON-parsed co-installed-
+  hook count, perms, recent unredacted-access log summary.
+- Ollama backend TCP-probes before returning Some.
+- Hook handler reads `shadow.state` on every invocation.
+
+**Release pipeline:**
+- `.github/workflows/release.yml`: 5 targets (linux musl x86_64,
+  linux gnu aarch64, darwin x86_64, darwin aarch64, windows x86_64).
+- `nid-package` packer binary runs on the host, not the target.
+- `nid-keygen` for initial signing-key generation.
+- Hook response carries `additionalContext.nid` attestation block.
+
+**Tests: 213 passing** (was 160 at 0.1.0, 188 at the round-1 verification).
 
 ## [0.1.0] — initial architecture-complete snapshot
 

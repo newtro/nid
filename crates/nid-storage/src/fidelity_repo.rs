@@ -46,6 +46,48 @@ impl<'a> FidelityRepo<'a> {
             )
         })
     }
+
+    /// Count distinct sessions that recorded any fidelity event for this
+    /// profile. Used to implement the bypass-tracker warmup window
+    /// (plan §8.2 — ignore first 3 runs after profile activation).
+    pub fn distinct_sessions_for(&self, profile_id: i64) -> Result<i64, DbError> {
+        self.db.with_conn(|c| {
+            c.query_row(
+                "SELECT COUNT(DISTINCT session_id) FROM fidelity_events
+                 WHERE profile_id = ?1 AND session_id IS NOT NULL",
+                [profile_id],
+                |r| r.get(0),
+            )
+        })
+    }
+
+    /// Rolling-window bypass score (plan §8.2): per-session sum of
+    /// `bypass_signal.weight`, averaged over the most-recent `window`
+    /// sessions for this profile. Returns (score, window_count).
+    pub fn rolling_bypass_score(
+        &self,
+        profile_id: i64,
+        window: usize,
+    ) -> Result<(f64, i64), DbError> {
+        self.db.with_conn(|c| {
+            let mut s = c.prepare(
+                "SELECT COALESCE(SUM(weight), 0.0) AS s FROM fidelity_events
+                 WHERE profile_id = ?1 AND kind = 'bypass_signal'
+                 GROUP BY session_id
+                 ORDER BY MAX(at) DESC
+                 LIMIT ?2",
+            )?;
+            let rows: Vec<f64> = s
+                .query_map(params![profile_id, window as i64], |r| r.get::<_, f64>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let n = rows.len() as i64;
+            if n == 0 {
+                return Ok((0.0, 0));
+            }
+            let sum: f64 = rows.iter().sum();
+            Ok((sum / n as f64, n))
+        })
+    }
 }
 
 #[cfg(test)]
