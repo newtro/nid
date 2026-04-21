@@ -1,0 +1,22 @@
+[package]
+name = "nid-fidelity"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+regex.workspace = true
+
+nid-core.workspace = true
+nid-storage.workspace = true
+nid-dsl.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

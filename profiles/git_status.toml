@@ -1,0 +1,34 @@
+# git status — plan Appendix C
+[meta]
+fingerprint = "git status"
+version = "1.0.0"
+schema = "1.0"
+format_claim = "plain"
+description = "Collapse git status output to sectioned header + changed/untracked file lines."
+
+[[rules]]
+kind = "strip_ansi"
+
+# Keep header lines, section headings, and file-change entries.
+[[rules]]
+kind = "keep_lines"
+match = '^(On branch |Your branch|HEAD detached|Changes |Untracked |nothing to |\s+(new file|modified|deleted|renamed|typechange):|\s+[A-Za-z0-9_.-]+\s*$)'
+
+# Drop verbose hint lines like "(use 'git add <file>' to update...)".
+[[rules]]
+kind = "drop_lines"
+match = '^\s*\(.*\)\s*$'
+
+[[rules]]
+kind = "dedup"
+
+[[invariants]]
+name = "BranchLinePreserved"
+check = "first_line_matches"
+pattern = "^(On branch |HEAD detached|Your branch)"
+
+[[invariants]]
+name = "NothingOrChangesLinePreserved"
+check = "count_matches_at_least"
+pattern = "^(nothing to |Changes )"
+count = 1

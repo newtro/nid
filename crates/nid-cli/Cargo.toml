@@ -1,0 +1,34 @@
+[package]
+name = "nid-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "nid"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+directories.workspace = true
+
+nid-core.workspace = true
+nid-dsl.workspace = true
+nid-storage.workspace = true
+nid-hooks.workspace = true
+nid-fidelity.workspace = true
+nid-synthesis.workspace = true
+nid-profiles.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+assert_cmd = "2"
