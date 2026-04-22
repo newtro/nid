@@ -116,6 +116,11 @@ in a week to see what you saved.
 
 ## What nid does
 
+> **For humans:** Your AI coding assistant runs shell commands and reads all
+> the output. Most of that output is noise. nid shrinks each command's
+> output to what actually matters before the assistant sees it, and keeps
+> a full copy on your disk in case you ever want to look at it.
+
 AI coding agents consume tokens linearly with the output of every shell
 command they run. `cargo build`, `pytest -v`, `docker logs`,
 `kubectl get pods`, `git log`, `terraform plan` routinely emit thousands
@@ -136,6 +141,9 @@ See [Safety built into the design](#safety-built-into-the-design) above
 for the invariants that keep the pipeline trustworthy.
 
 ## Quick start
+
+> **For humans:** Install, onboard, forget about it. The examples below
+> also show how to read saved output and check how much you've saved.
 
 ```bash
 # Build from source (prebuilt binaries documented below).
@@ -167,7 +175,15 @@ nid onboard --uninstall
 
 ## Install
 
+> **For humans:** Two ways to install. Grab a prebuilt signed binary, or
+> build from source with Cargo. The on-disk layout subsection tells you
+> where nid keeps its config and database.
+
 ### Prebuilt release
+
+> **For humans:** Every push to main publishes a fresh signed binary for
+> Linux, macOS, and Windows. Download the one for your machine and let
+> nid verify it before installing.
 
 Releases are published on every push to `main` (rolling `main` channel)
 and on every `v*.*.*` tag (versioned channel). Each release carries one
@@ -192,6 +208,9 @@ nid update --from nid-x86_64-unknown-linux-musl.nidrel
 
 ### From source
 
+> **For humans:** If you have Rust installed, one `cargo install` command
+> builds nid locally.
+
 Requires a stable Rust toolchain 1.80 or newer.
 
 ```bash
@@ -199,6 +218,10 @@ cargo install --path crates/nid-cli
 ```
 
 ### On-disk layout
+
+> **For humans:** This is where nid keeps its files. Config in one place,
+> database and saved output in another. Everything stays inside these
+> two directories.
 
 After onboarding, nid writes to:
 
@@ -223,6 +246,10 @@ After onboarding, nid writes to:
 
 ## Architecture
 
+> **For humans:** nid is split into eight small libraries plus one binary.
+> Each library has a single responsibility. The table below is a short
+> tour of what each one is for.
+
 8-crate Cargo workspace:
 
 | Crate | Responsibility |
@@ -237,6 +264,11 @@ After onboarding, nid writes to:
 | [`nid-profiles`](crates/nid-profiles) | Bundled Layer 3 profiles. `build.rs` compiles `profiles/*.toml` into the binary. |
 
 ### Compression pipeline
+
+> **For humans:** Every command runs through two passes. The first pass
+> strips universal junk like color codes and duplicate lines. The second
+> pass applies a rule set picked for that specific command, either a
+> learned one or a hand-written one that ships with nid.
 
 Two-tier hierarchical dispatch. Tier A always runs. Tier B picks exactly
 one implementation based on priority.
@@ -288,6 +320,11 @@ Roughly:
 
 ### Fingerprinting (Scheme R)
 
+> **For humans:** nid needs to recognize when two commands are "the same
+> command with different arguments" so it can reuse the same rules.
+> Fingerprinting turns `git show abc1234` and `git show def5678` into the
+> same identifier by replacing the hash with a placeholder.
+
 A stable fingerprint is the binary basename plus the canonicalized argv
 tail.
 
@@ -316,6 +353,12 @@ Progressive splitting (`profiles.parent_fp` with `profiles.split_on_flag`)
 is planned for v1.1. In v1 there is one profile per fingerprint.
 
 ### Learning loop
+
+> **For humans:** When nid sees a command it doesn't recognize, it watches
+> a few runs, works out which lines are always the same and which change,
+> and writes its own compression rules. A language model can optionally
+> polish those rules. The next run of the same command gets the learned
+> rules automatically.
 
 On an unknown fingerprint, nid:
 
@@ -356,6 +399,12 @@ Re-synthesis triggers:
 
 ### Fidelity measurement
 
+> **For humans:** Compression has to keep the important signal intact. nid
+> runs four kinds of checks on every compressed output: regex invariants,
+> structural-subset checks, sampled judge-model scoring, and behavioral
+> signals that reveal when an agent is working around the compression.
+> Profiles that fail these checks get retired automatically.
+
 Four tiers:
 
 | Tier | Cost | Frequency | Detects |
@@ -382,6 +431,11 @@ The denominator is all recent sessions (clean or dirty). A single
 Per-session weight caps at 1.0.
 
 ## CLI reference
+
+> **For humans:** Everything nid can do from the command line. The one
+> you'll use most is `nid <command>` because that is what the agent hook
+> calls. The rest are for reading saved output, inspecting profiles,
+> tweaking settings, and keeping the install healthy.
 
 ### `nid <command...>`
 
@@ -546,6 +600,10 @@ passthrough, shadow prefix), emits `{updatedInput, additionalContext}`.
 
 ## Configuration
 
+> **For humans:** nid works out of the box with zero config. If you want
+> to tweak something, drop a `config.toml` in the path below. Every field
+> is optional and has a sensible default.
+
 `~/.config/nid/config.toml`. All fields are optional. Missing keys take
 defaults. A malformed file logs a warning and falls back to defaults. nid
 never refuses to start on config errors.
@@ -601,6 +659,11 @@ judge_sample_rate = 0.01
 
 ## Agent integration
 
+> **For humans:** Each AI coding tool has its own way of hooking into
+> shell commands. nid ships with the glue for eight of them. You don't
+> need to read any of the hook formats; `nid onboard` wires everything
+> up.
+
 nid supports 8 AI coding agents out of the box:
 
 | Agent | Config file | Hook mechanism |
@@ -640,6 +703,11 @@ Rewrite rules applied by every agent's hook:
 
 ### Aider caveat
 
+> **For humans:** Aider is the one agent that doesn't expose a
+> per-command hook, so nid's integration there is weaker. If you
+> override Aider's config on the command line, nid is silently skipped
+> for that session.
+
 Aider has no per-invocation hook API. nid's integration wraps the user's
 `.aider.conf.yml` with a `shell-command-prefix: "nid"` key. If you reset
 that config or launch Aider with CLI overrides that bypass the config,
@@ -647,6 +715,9 @@ nid is silently skipped for that session. `nid doctor` detects missing
 Aider config when the Aider binary is on PATH.
 
 ### Claude Code bypass-permissions quirk
+
+> **For humans:** This is a note for contributors touching the hook
+> code. If you are just using nid, you can skip it.
 
 Claude Code has an upstream bug where `updatedInput` is silently dropped
 when combined with `permissionDecision` under bypass-permissions mode.
@@ -656,7 +727,18 @@ bypass-permissions path.
 
 ## Security model
 
+> **For humans:** nid stores your shell output and builds compression
+> rules on your behalf. This section explains how that storage is
+> protected, how secrets are scrubbed before anything is saved, why the
+> compression rules cannot do anything scary, and how release binaries
+> prove they came from this project.
+
 ### Raw storage
+
+> **For humans:** Saved shell output is encrypted with a key that lives
+> on your machine. If you back up the database without the key, the
+> backup cannot be read, and nid will refuse to silently drop the old
+> data to paper over that.
 
 Raw output is stored unredacted and AES-GCM-sealed with a machine-local
 32-byte key at `~/.local/share/nid/key`. Unix permissions are 0600. On
@@ -686,6 +768,11 @@ incomplete backup restore.
 
 ### Secret redaction
 
+> **For humans:** Before any output is saved to disk, nid scrubs out
+> anything that looks like an API key, password, or token. You can add
+> your own patterns. For especially sensitive commands you can force an
+> even more aggressive sweep.
+
 Applied before the raw blob is sealed. The sealed payload therefore
 cannot contain secrets unless a pattern failed to match. Built-in
 patterns:
@@ -709,6 +796,11 @@ an additional `\b[A-Za-z0-9_+/=-]{24,}\b` sweep marked
 `[REDACTED:deny]`.
 
 ### DSL sandboxing
+
+> **For humans:** Compression rules are declarative data. The interpreter
+> has no way to read files, open sockets, or run programs. Each rule set
+> also has strict time and memory budgets; anything that goes over gets
+> killed and the rule set retired.
 
 The DSL grammar has no IO, subprocess, filesystem, eval, or network
 primitives. The validator additionally rejects:
@@ -738,6 +830,12 @@ Auto-synthesized profiles that abort the budget on any of their own
 training samples are rejected before promotion.
 
 ### Release signing and anchor pinning
+
+> **For humans:** Every release is cryptographically signed. Your
+> installed binary remembers the project's signing key and refuses to
+> upgrade to anything that key didn't sign. When the project rotates
+> keys, the rotation itself is signed, so the chain of trust stays
+> intact.
 
 Every `.nidrel` release tarball contains:
 
@@ -786,6 +884,10 @@ from the `NID_RELEASE_SIGNING_KEY` repo secret.
 
 ## Data model
 
+> **For humans:** nid uses a single SQLite file to track everything it
+> knows about your commands, sessions, learned profiles, and savings.
+> The table below is a short tour of what each table is for.
+
 Eleven-table SQLite schema. Full DDL in
 [`crates/nid-storage/src/sql/001_initial.sql`](crates/nid-storage/src/sql/001_initial.sql).
 
@@ -817,6 +919,12 @@ per-blob AES-GCM on raw blobs only. SQLite itself is vanilla (no
 SQLCipher).
 
 ## DSL reference
+
+> **For humans:** Compression rules are written in TOML. A rule set is a
+> list of small declarative steps (drop these lines, keep those, stop
+> repeating) plus a list of things that must still be true when the
+> rules finish running. The example below is a real rule set for
+> `git status`.
 
 Full reference in [`docs/dsl-reference.md`](docs/dsl-reference.md).
 Quick tour:
@@ -877,6 +985,10 @@ pattern = "^(On branch |HEAD detached|Your branch)"
 
 ### Bundled profiles
 
+> **For humans:** These are the commands that ship with hand-written
+> rule sets out of the box. Anything else gets a learned rule set on the
+> fly.
+
 20 profiles in [`profiles/`](profiles):
 
 `git status`, `git log`, `git diff`, `git branch -a`, `cargo build`,
@@ -892,6 +1004,11 @@ asserts that every non-identity fixture demonstrates real byte
 reduction (no test-theatre).
 
 ## Releases
+
+> **For humans:** Every push to main produces a fresh set of signed
+> binaries. Tagged versions work the same way and stay around
+> permanently. This section documents the pipeline for anyone forking
+> the repo or debugging the release workflow.
 
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs on
 every push and pull request:
@@ -929,6 +1046,9 @@ per-arch tooling.
 
 ### Required repo secret
 
+> **For humans:** To publish releases from your own fork, generate a
+> signing key and paste it into a GitHub secret. Steps below.
+
 `NID_RELEASE_SIGNING_KEY`: 64 hex chars equal to a 32-byte ed25519 seed.
 The release workflow fails with a clear error when this is missing.
 Generate with:
@@ -946,6 +1066,11 @@ gh secret set NID_RELEASE_SIGNING_KEY --body "$(cat private-key.hex)"
 Or use the repo Settings UI.
 
 ### Release anchor
+
+> **For humans:** If you want users of your build to automatically trust
+> your release key, bake the public key into the binary at build time.
+> Skip this and users have to opt in to unanchored installs with an
+> environment variable.
 
 For production releases, bake the release pubkey into every `nid` build
 so the install path can verify signer identity without out-of-band
@@ -965,6 +1090,9 @@ rolling `main` builds that get installed by downstream CI, either:
    `NID_RELEASE_ALLOW_UNANCHORED=1`.
 
 ## Development
+
+> **For humans:** Standard cargo workflow. Build, test, lint, format.
+> The notes at the bottom cover a couple of testing quirks.
 
 ```bash
 # Clone and build everything.
@@ -996,6 +1124,9 @@ Test scaffolding notes:
 
 ## Contributing
 
+> **For humans:** Fork, branch, open a PR. CI on three platforms has to
+> pass before anything merges. Add tests for new behavior.
+
 The repository is public. The `main` branch is protected. Open a pull
 request from a fork or a topic branch. CI must pass (`fmt`,
 `clippy -D warnings`, `test` on all three OSes) before a PR can be
@@ -1022,6 +1153,9 @@ Scope guardrails:
   through it.
 
 ## License
+
+> **For humans:** Pick whichever of Apache-2.0 or MIT works better for
+> you. Contributions are licensed under both.
 
 Dual-licensed under either of:
 
