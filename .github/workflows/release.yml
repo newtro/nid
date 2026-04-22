@@ -2,20 +2,86 @@ name: release
 
 on:
   push:
+    branches: [main]
     tags:
       - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g. v0.1.0)'
-        required: true
+        description: 'Explicit tag (e.g. v0.1.0). Leave blank for a rolling main release.'
+        required: false
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  # Gate release on CI passing. Duplicates ci.yml checks so a direct push
+  # to main still has a guard before the artifacts go out.
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --all-targets
+
+  # Compute release metadata once so every matrix build agrees on tag +
+  # version + whether this is a prerelease.
+  metadata:
+    name: metadata
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      version: ${{ steps.meta.outputs.version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      make_latest: ${{ steps.meta.outputs.make_latest }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+            PRERELEASE=false
+            MAKE_LATEST=true
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+            VERSION="${TAG#v}"
+            PRERELEASE=false
+            MAKE_LATEST=true
+          else
+            # Push to main → rolling pre-release tagged `main`, overwritten
+            # each push. `nid update --channel main` pulls from this.
+            SHA_SHORT="$(git rev-parse --short "${GITHUB_SHA}")"
+            TAG="main"
+            VERSION="0.0.0-main.${SHA_SHORT}"
+            PRERELEASE=true
+            MAKE_LATEST=false
+          fi
+          {
+            echo "release_tag=${TAG}"
+            echo "version=${VERSION}"
+            echo "is_prerelease=${PRERELEASE}"
+            echo "make_latest=${MAKE_LATEST}"
+          } >> "$GITHUB_OUTPUT"
+
   build:
+    name: build ${{ matrix.target }}
+    needs: metadata
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -43,10 +109,10 @@ jobs:
       NID_TARGET_TRIPLE: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install Rust (stable + target)
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -65,34 +131,34 @@ jobs:
           linker = "aarch64-linux-gnu-gcc"
           EOF
 
-      # Build the release binary for the matrix target.
-      - name: Build target binary
+      - name: Build release binary (target)
         run: cargo build --release --bin nid --target ${{ matrix.target }}
 
-      # Build the packaging helper for the HOST (not --target), so it runs in CI.
-      - name: Build host packager
+      - name: Build packager (host)
         run: cargo build --release --bin nid-package
 
-      - name: Pack signed release tarball (*nix)
+      - name: Check signing key is present
+        shell: bash
+        env:
+          KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::NID_RELEASE_SIGNING_KEY secret is not set. Add the repo secret before pushing a release. Generate a key with: cargo run --release --bin nid-keygen > private-key.hex"
+            exit 1
+          fi
+
+      - name: Pack signed release tarball (unix)
         if: matrix.os != 'windows-latest'
         shell: bash
         env:
           NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
-          if [ -z "$VERSION" ] || [ "$VERSION" = "$GITHUB_REF_NAME" ]; then
-            VERSION="${{ github.event.inputs.tag }}"
-            VERSION="${VERSION#v}"
-          fi
-          if [ -z "$VERSION" ]; then VERSION="0.0.0-unknown"; fi
           BIN="target/${{ matrix.target }}/release/nid${{ matrix.bin_suffix }}"
           PACKAGER="target/release/nid-package${{ matrix.bin_suffix }}"
-          test -f "$BIN"
-          test -f "$PACKAGER"
           "$PACKAGER" \
             --binary "$BIN" \
-            --version "$VERSION" \
+            --version "${{ needs.metadata.outputs.version }}" \
             --target "${{ matrix.target }}" \
             --output "${{ matrix.artifact }}" \
             --signing-key-hex "$NID_RELEASE_SIGNING_KEY"
@@ -102,18 +168,12 @@ jobs:
         shell: pwsh
         env:
           NID_RELEASE_SIGNING_KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
-          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
-          $Version = $env:GITHUB_REF_NAME -replace '^v',''
-          if (-not $Version -or $Version -eq $env:GITHUB_REF_NAME) {
-            $InputTag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { "0.0.0-unknown" }
-            $Version  = $InputTag -replace '^v',''
-          }
-          $Bin     = "target/${{ matrix.target }}/release/nid.exe"
-          $Packer  = "target/release/nid-package.exe"
+          $Bin    = "target/${{ matrix.target }}/release/nid.exe"
+          $Packer = "target/release/nid-package.exe"
           & $Packer `
             --binary $Bin `
-            --version $Version `
+            --version "${{ needs.metadata.outputs.version }}" `
             --target "${{ matrix.target }}" `
             --output "${{ matrix.artifact }}" `
             --signing-key-hex $env:NID_RELEASE_SIGNING_KEY
@@ -125,18 +185,52 @@ jobs:
           path: ${{ matrix.artifact }}
 
   publish:
-    needs: build
+    needs: [metadata, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./dist
-      - name: Create draft release
+
+      # For rolling-main releases we need to force-move the `main` tag to
+      # the current commit; `softprops/action-gh-release` handles creating
+      # the tag if it doesn't exist, but for an existing moving tag we
+      # delete+recreate the release first to keep it clean.
+      - name: Delete existing rolling release (main-channel only)
+        if: needs.metadata.outputs.release_tag == 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete main --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name || github.event.inputs.tag }}
+          tag_name: ${{ needs.metadata.outputs.release_tag }}
+          name: >-
+            ${{ needs.metadata.outputs.release_tag == 'main'
+                && format('main @ {0}', needs.metadata.outputs.version)
+                || needs.metadata.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
           files: dist/**/*.nidrel
-          draft: true
+          draft: false
+          prerelease: ${{ needs.metadata.outputs.is_prerelease }}
+          make_latest: ${{ needs.metadata.outputs.make_latest }}
           generate_release_notes: true
+          body: |
+            Built from commit [`${{ github.sha }}`](https://github.com/${{ github.repository }}/commit/${{ github.sha }}).
+
+            ### Install
+            ```
+            nid update --from <downloaded>.nidrel
+            ```
+
+            ### Verify
+            Each `.nidrel` tarball is ed25519-signed. Verification is
+            enforced against the anchor key baked into every `nid` binary
+            at build time. See [README.md](https://github.com/${{ github.repository }}/blob/main/README.md#releases--signing).
