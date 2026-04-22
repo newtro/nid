@@ -10,9 +10,49 @@ window. Target range: 60 to 90 percent token reduction on common dev
 commands while preserving task-success fidelity.
 
 Three-letter name. Single binary. Zero required runtime dependencies.
-Install, onboard, forget. Every new command gets profiled automatically.
-Profiles improve over time. Fidelity is continuously validated. Nothing
-interrupts the user mid-session.
+Install, onboard, forget.
+
+### Ships with pre-trained profiles
+
+Day one comes with 20 hand-tuned compression profiles for the commands
+agents run most often: `git status`, `git log`, `git diff`,
+`git branch -a`, `cargo build`, `cargo test`, `pytest`, `npm install`,
+`docker ps`, `kubectl get pods`, `terraform plan`, `tsc`, `eslint`,
+`ruff`, `mypy`, `go test`, `jq .`, `psql`, `make`, `aws s3 ls`,
+`gh pr list`, `az webapp log tail`. Each profile is backed by a golden
+fixture test that enforces byte-equal output and real token reduction.
+You get meaningful savings the moment `nid onboard` finishes.
+
+### Learns new commands on the fly
+
+Every command nid has never seen before gets captured as a sample. After
+five samples (or three if the output is byte-identical), nid runs a
+structural-diff synthesizer to generate a compression profile for that
+specific command fingerprint, validates it against invariants derived
+from the samples, and promotes it to `active`. Next time the same
+command runs, the learned profile applies automatically. An optional
+LLM refinement step (Anthropic, local Ollama, or `claude` CLI) polishes
+the profile further when a backend is configured.
+
+The result: the set of compressed commands grows with your workflow.
+A one-off `aws cloudfront get-distribution --id ...` profiles itself
+after five runs. A team-wide `terraform state list` picks up a profile
+once anyone on the team runs it enough times. No manual curation, no
+user prompts, no configuration changes.
+
+### Three guarantees
+
+1. Compression output is always a structural subset of input. Lines
+   are kept, dropped, or collapsed. Lines are never rewritten. The one
+   exception (Layer 4 small-LLM catch-all, deferred to v1.1) marks its
+   output `Mode::Degraded`.
+2. Learned profiles are declarative. nid's DSL is TOML, interpreted in
+   pure Rust. No Wasm, no eval, no regex backreferences. A malicious
+   DSL imported from a third party cannot escape the interpreter.
+3. Synthesis runs silently. The user is never asked to approve a
+   profile mid-session. Self-tests derived from the samples gate
+   promotion. Profiles that fail the execution budget on their own
+   training samples are rejected.
 
 ## Table of Contents
 
@@ -57,20 +97,9 @@ your agent  ->  pytest -v       ->  PreTool hook  ->  nid pytest -v  ->  nid
 your agent  <-  compressed + attest <-  back through   <-  captured  <----+
 ```
 
-Three non-obvious design choices worth calling out before anything else:
-
-1. Compression output is always a structural subset of input. Lines are
-   kept, dropped, or collapsed. Lines are never rewritten. The one
-   exception (Layer 4 small-LLM catch-all, deferred to v1.1) marks its
-   output `Mode::Degraded`.
-2. Learned profiles are declarative. nid's DSL is TOML, interpreted in
-   pure Rust. No Wasm, no eval, no regex backreferences. A malicious DSL
-   imported from a third party cannot escape the interpreter.
-3. Synthesis runs silently. The first N invocations of an unknown
-   command accumulate samples. A structural-diff synthesizer (with
-   optional LLM refinement) produces a candidate profile. Self-tests
-   derived from the samples gate promotion. The user is never asked to
-   approve a profile mid-session.
+The [Three guarantees](#three-guarantees) above describe how this stays
+safe: structural-subset compression, declarative DSL with no eval
+surface, and silent synthesis gated by self-tests.
 
 ## Quick start
 

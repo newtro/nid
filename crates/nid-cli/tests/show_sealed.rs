@@ -23,15 +23,18 @@ fn tmp_env() -> (TempDir, std::path::PathBuf, std::path::PathBuf) {
 #[test]
 fn show_redacts_by_default_and_unredacts_under_confirmation() {
     // Run a synthetic command that emits a fake AWS key, then show the
-    // session both ways.
+    // session both ways. Note: `nid <cmd...>` joins its argv into a
+    // single string and spawns `sh -c <joined>`. Nesting `sh -c` on top
+    // of that double-shells and collapses the command. A plain `echo
+    // AKIA...` works fine because the outer sh resolves echo as the
+    // first token.
     let (_t, cfg, data) = tmp_env();
     let fake_secret = "AKIAIOSFODNN7EXAMPLE";
     let out = nid()
         .env("NID_CONFIG_DIR", &cfg)
         .env("NID_DATA_DIR", &data)
-        .arg("sh")
-        .arg("-c")
-        .arg(format!("echo {fake_secret}"))
+        .arg("echo")
+        .arg(fake_secret)
         .output()
         .unwrap();
     // `nid <cmd>` exits with the wrapped command's exit code.

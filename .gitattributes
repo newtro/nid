@@ -1,0 +1,22 @@
+# Keep all text files LF on checkout so Windows runners don't see CRLF
+# in fixtures, profile TOMLs, or regexes that match on byte-exact
+# newlines.
+* text=auto eol=lf
+
+# Extra belt-and-suspenders for the file types where a CRLF conversion
+# would break tests.
+*.rs   text eol=lf
+*.toml text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+*.txt  text eol=lf
+
+tests/fixtures/** text eol=lf
+profiles/**       text eol=lf
+
+# Binary assets.
+*.png binary
+*.zst binary
+*.nidrel binary
