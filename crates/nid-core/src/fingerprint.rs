@@ -159,6 +159,14 @@ mod tests {
     fn bare_binary_returns_basename() {
         assert_eq!(fp(&["git"]), "git");
         assert_eq!(fp(&["/usr/bin/git"]), "git");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_path_returns_basename() {
+        // `Path::file_stem` on Unix treats `\` as part of the filename
+        // rather than a separator, so this assertion is correct only on
+        // Windows.
         assert_eq!(fp(&["C:\\bin\\git.exe"]), "git");
     }
 

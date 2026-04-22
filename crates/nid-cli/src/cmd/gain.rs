@@ -98,7 +98,7 @@ pub async fn run(args: GainArgs) -> Result<()> {
     }
 
     let mut fps: Vec<(String, Accumulator)> = by_fp.into_iter().collect();
-    fps.sort_by(|a, b| b.1.tokens_saved().cmp(&a.1.tokens_saved()));
+    fps.sort_by_key(|(_, acc)| std::cmp::Reverse(acc.tokens_saved()));
 
     println!("\ntop {} fingerprints by tokens saved:", args.top);
     for (fp, acc) in fps.into_iter().take(args.top) {

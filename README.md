@@ -4,55 +4,90 @@
 
 # nid
 
-A Rust CLI proxy that sits between AI coding agents and the shell. It
-compresses command output before the output reaches the agent's context
-window. Target range: 60 to 90 percent token reduction on common dev
-commands while preserving task-success fidelity.
+**Your AI coding agent is burning tokens on output nobody reads.**
 
-Three-letter name. Single binary. Zero required runtime dependencies.
-Install, onboard, forget.
+`cargo build` dumps 3,000 lines of `Compiling foo v0.1.0` the agent
+never looks at. `pytest -v` ships full stack frames when a single
+`test_x FAILED` line carried the signal. `docker logs`, `terraform
+plan`, `git log`, `kubectl get pods`: every one of them bleeds context
+window for noise. On real workloads this runs to dollars per session.
 
-### Ships with pre-trained profiles
+**nid compresses the noise out, losslessly where possible.**
 
-Day one comes with 20 hand-tuned compression profiles for the commands
-agents run most often: `git status`, `git log`, `git diff`,
-`git branch -a`, `cargo build`, `cargo test`, `pytest`, `npm install`,
-`docker ps`, `kubectl get pods`, `terraform plan`, `tsc`, `eslint`,
-`ruff`, `mypy`, `go test`, `jq .`, `psql`, `make`, `aws s3 ls`,
-`gh pr list`, `az webapp log tail`. Each profile is backed by a golden
-fixture test that enforces byte-equal output and real token reduction.
-You get meaningful savings the moment `nid onboard` finishes.
+A single Rust binary installs into your agent's PreTool hook. From that
+moment on, every shell command the agent runs flows through nid. The
+output that comes back is a structural subset of the original: lines
+are kept, dropped, or collapsed. No rewrites, no hallucinations, no
+lost error messages. Typical reduction: 60 to 90 percent. The raw
+output stays in an encrypted local archive and is retrievable with one
+command whenever the agent (or you) actually needs it.
 
-### Learns new commands on the fly
+### 20 pre-trained profiles, zero configuration
 
-Every command nid has never seen before gets captured as a sample. After
-five samples (or three if the output is byte-identical), nid runs a
-structural-diff synthesizer to generate a compression profile for that
+Day one ships with hand-tuned compression profiles for the commands
+agents run most: `git status`, `git log`, `git diff`, `git branch -a`,
+`cargo build`, `cargo test`, `pytest`, `npm install`, `docker ps`,
+`kubectl get pods`, `terraform plan`, `tsc`, `eslint`, `ruff`, `mypy`,
+`go test`, `jq .`, `psql`, `make`, `aws s3 ls`, `gh pr list`,
+`az webapp log tail`. Every profile is backed by a byte-equal golden
+fixture test that enforces real reduction. You get savings the moment
+`nid onboard` finishes. No curation, no tuning.
+
+### Learns new commands on the fly. Silently.
+
+The profiles that ship are a floor. The first time your agent runs a
+command nid has never seen, nid captures the output as a sample. After
+five samples (three when the output is byte-identical across runs), a
+structural-diff synthesizer generates a compression profile for that
 specific command fingerprint, validates it against invariants derived
-from the samples, and promotes it to `active`. Next time the same
-command runs, the learned profile applies automatically. An optional
-LLM refinement step (Anthropic, local Ollama, or `claude` CLI) polishes
-the profile further when a backend is configured.
+from the samples, and promotes it to active. The next invocation of
+the same command hits the learned profile. An optional LLM refinement
+step (Anthropic, local Ollama, or `claude` CLI) polishes the rules
+further when a backend is available.
 
-The result: the set of compressed commands grows with your workflow.
-A one-off `aws cloudfront get-distribution --id ...` profiles itself
-after five runs. A team-wide `terraform state list` picks up a profile
-once anyone on the team runs it enough times. No manual curation, no
-user prompts, no configuration changes.
+One-off `aws cloudfront get-distribution --id ...`? Profiles itself
+after five invocations. Team-wide `terraform state list`? Picks up a
+profile once anyone runs it enough times. Every new CLI the agent
+touches joins the coverage set automatically.
 
-### Three guarantees
+**No approval prompts. No configuration. No telemetry. No manual
+curation.** Synthesis is silent, self-tested against the training
+samples before promotion, and reversible: `nid profiles rollback` is
+one command away if a synthesized profile regresses.
 
-1. Compression output is always a structural subset of input. Lines
-   are kept, dropped, or collapsed. Lines are never rewritten. The one
-   exception (Layer 4 small-LLM catch-all, deferred to v1.1) marks its
-   output `Mode::Degraded`.
-2. Learned profiles are declarative. nid's DSL is TOML, interpreted in
-   pure Rust. No Wasm, no eval, no regex backreferences. A malicious
-   DSL imported from a third party cannot escape the interpreter.
-3. Synthesis runs silently. The user is never asked to approve a
-   profile mid-session. Self-tests derived from the samples gate
-   promotion. Profiles that fail the execution budget on their own
-   training samples are rejected.
+### Safety built into the design
+
+- **Compression is a structural subset of input.** Lines are kept,
+  dropped, or collapsed. Lines are never rewritten. Error messages,
+  exit indicators, and pattern matches are preserved as invariants the
+  synthesizer is required to respect.
+- **Learned profiles are declarative.** The DSL is TOML, interpreted
+  in pure Rust with a bounded execution budget (10M steps, 2s
+  wallclock, 64MB peak memory). No Wasm, no eval, no regex
+  backreferences. A malicious profile imported from a third party
+  cannot escape the interpreter.
+- **Raw output is always preserved.** Stored AES-GCM-sealed with a
+  machine-local key. Default reads re-redact on the fly. Secrets
+  (AWS keys, GitHub PATs, JWTs, Stripe keys, SSH private keys, bearer
+  tokens, high-entropy generic secrets) are redacted before the blob
+  is sealed.
+- **Signed releases, pinned anchors.** Every binary ships with an
+  ed25519 anchor pubkey baked in. `nid update --from <tarball>`
+  refuses to install anything the anchor cannot verify. Key rotation
+  is supported via signed rotation records that chain back to the
+  anchor.
+- **Continuous fidelity validation.** Every compressed output runs
+  through four tiers of checks: DSL invariants, structural subset,
+  behavioral bypass-signal detection, and a quarantine path that
+  retires any profile whose agents work around it.
+
+### One binary. Eight agents. Works today.
+
+Supports Claude Code, Cursor, Codex CLI, Gemini CLI, Copilot CLI,
+Windsurf, OpenCode, and Aider out of the box. Install with `cargo
+install --path crates/nid-cli` or download a signed release for your
+platform. Run `nid onboard` once. Forget it exists. Check `nid gain`
+in a week to see what you saved.
 
 ## Table of Contents
 
@@ -97,9 +132,8 @@ your agent  ->  pytest -v       ->  PreTool hook  ->  nid pytest -v  ->  nid
 your agent  <-  compressed + attest <-  back through   <-  captured  <----+
 ```
 
-The [Three guarantees](#three-guarantees) above describe how this stays
-safe: structural-subset compression, declarative DSL with no eval
-surface, and silent synthesis gated by self-tests.
+See [Safety built into the design](#safety-built-into-the-design) above
+for the invariants that keep the pipeline trustworthy.
 
 ## Quick start
 
