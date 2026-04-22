@@ -209,13 +209,28 @@ nid update --from nid-x86_64-unknown-linux-musl.nidrel
 ### From source
 
 > **For humans:** If you have Rust installed, one `cargo install` command
-> builds nid locally.
+> builds nid locally. You can install straight from the git repo without
+> cloning, or clone first and install from a local path.
 
 Requires a stable Rust toolchain 1.80 or newer.
+
+One-liner, no clone required:
+
+```bash
+cargo install --git https://github.com/newtro/nid nid-cli
+```
+
+From a local clone:
 
 ```bash
 cargo install --path crates/nid-cli
 ```
+
+Either path installs a single binary, `nid`, into `~/.cargo/bin/`. The
+release-maintainer helpers (`nid-package`, `nid-keygen`) are gated behind
+the `release-tools` feature and are not installed by default. Enable them
+with `--features release-tools` if you want to cut your own signed
+builds.
 
 ### On-disk layout
 
@@ -863,7 +878,8 @@ Verification steps (in
 Generate a signing key:
 
 ```bash
-cargo run --release --bin nid-keygen > private-key.hex
+cargo run --release -p nid-cli --features release-tools \
+  --bin nid-keygen > private-key.hex
 # stderr reports: key_id + pubkey hex. Use these to set
 # NID_RELEASE_ANCHOR_HEX in the next nid build.
 ```
@@ -871,7 +887,8 @@ cargo run --release --bin nid-keygen > private-key.hex
 Pack a signed release manually:
 
 ```bash
-cargo run --release --bin nid-package -- \
+cargo run --release -p nid-cli --features release-tools \
+  --bin nid-package -- \
   --binary target/x86_64-unknown-linux-musl/release/nid \
   --version 0.1.0 \
   --target x86_64-unknown-linux-musl \
@@ -1054,7 +1071,7 @@ The release workflow fails with a clear error when this is missing.
 Generate with:
 
 ```bash
-cargo run --release --bin nid-keygen
+cargo run --release -p nid-cli --features release-tools --bin nid-keygen
 ```
 
 Set via the `gh` CLI:

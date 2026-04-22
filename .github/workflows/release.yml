@@ -135,7 +135,7 @@ jobs:
         run: cargo build --release --bin nid --target ${{ matrix.target }}
 
       - name: Build packager (host)
-        run: cargo build --release --bin nid-package
+        run: cargo build --release --bin nid-package -p nid-cli --features release-tools
 
       - name: Check signing key is present
         shell: bash
@@ -143,7 +143,7 @@ jobs:
           KEY: ${{ secrets.NID_RELEASE_SIGNING_KEY }}
         run: |
           if [ -z "$KEY" ]; then
-            echo "::error::NID_RELEASE_SIGNING_KEY secret is not set. Add the repo secret before pushing a release. Generate a key with: cargo run --release --bin nid-keygen > private-key.hex"
+            echo "::error::NID_RELEASE_SIGNING_KEY secret is not set. Add the repo secret before pushing a release. Generate a key with: cargo run --release -p nid-cli --features release-tools --bin nid-keygen > private-key.hex"
             exit 1
           fi
 
